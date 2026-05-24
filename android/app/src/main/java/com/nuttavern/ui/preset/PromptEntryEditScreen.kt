@@ -84,6 +84,7 @@ internal fun PromptEntryEditScreen(
     onSave: (PromptEntry) -> Unit,
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)? = null,
+    onUnlink: (() -> Unit)? = null,
 ) {
     BackHandler(enabled = true) { onDismiss() }
 
@@ -100,6 +101,7 @@ internal fun PromptEntryEditScreen(
                 onSave = onSave,
                 onDismiss = onDismiss,
                 onDelete = onDelete,
+                onUnlink = onUnlink,
             )
         }
     }
@@ -112,6 +114,7 @@ private fun PromptEntryEditScreenContent(
     onSave: (PromptEntry) -> Unit,
     onDismiss: () -> Unit,
     onDelete: (() -> Unit)?,
+    onUnlink: (() -> Unit)?,
 ) {
     var draft by rememberSaveable(initial.identifier, stateSaver = PromptEntrySaver) {
         mutableStateOf(initial)
@@ -120,6 +123,7 @@ private fun PromptEntryEditScreenContent(
     val canSave = draft.name.isNotBlank()
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showUnlinkDialog by remember { mutableStateOf(false) }
 
     val triggerDismiss: () -> Unit = {
         if (isDirty) showDiscardDialog = true else onDismiss()
@@ -160,15 +164,6 @@ private fun PromptEntryEditScreenContent(
             }
             item(key = "basic") {
                 NutTavernGroupSection {
-                    NutTavernLabeledTextField(
-                        label = "内部 ID",
-                        value = draft.identifier,
-                        onValueChange = {},
-                        singleLine = true,
-                        readOnly = true,
-                        supportingText = "用于排序里引用,不能修改",
-                    )
-                    NutTavernGroupDivider()
                     NutTavernLabeledTextField(
                         label = "名称",
                         value = draft.name,
@@ -265,6 +260,19 @@ private fun PromptEntryEditScreenContent(
                 }
             }
 
+            if (onUnlink != null) {
+                item(key = "unlink") {
+                    NutTavernGroupSection {
+                        com.nuttavern.ui.components.NutTavernIconRow(
+                            icon = Lucide.X,
+                            title = "取消链接",
+                            subtitle = "条目保留但不再参与拼接,可随时重新链接",
+                            onClick = { showUnlinkDialog = true },
+                        )
+                    }
+                }
+            }
+
             if (onDelete != null) {
                 item(key = "delete") {
                     NutTavernGroupSection {
@@ -313,6 +321,23 @@ private fun PromptEntryEditScreenContent(
             },
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
+            },
+        )
+    }
+
+    if (showUnlinkDialog && onUnlink != null) {
+        AlertDialog(
+            onDismissRequest = { showUnlinkDialog = false },
+            title = { Text("取消链接?") },
+            text = { Text("「${draft.name.ifBlank { draft.identifier }}」将不再参与拼接,但条目定义保留,可随时重新链接。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showUnlinkDialog = false
+                    onUnlink()
+                }) { Text("取消链接") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showUnlinkDialog = false }) { Text("返回") }
             },
         )
     }

@@ -1,4 +1,4 @@
-package com.nuttavern.ui.preset
+﻿package com.nuttavern.ui.preset
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
@@ -47,6 +47,8 @@ import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Regex
 import com.composables.icons.lucide.Trash2
+import com.nuttavern.data.preset.ContinuePostfix
+import com.nuttavern.data.preset.NamesBehavior
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.preset.PromptEntry
 import com.nuttavern.data.preset.PromptOrderEntry
@@ -248,396 +250,8 @@ private fun PresetEditScreenContent(
                 )
             }
         }
-
-            item(key = "prompts-header") {
-                NutTavernGroupSection {
-                    NutTavernIconRow(
-                        icon = Lucide.Pencil,
-                        title = "提示词条目",
-                        subtitle = "${draft.prompts.size} 条 · ${enabledPromptCount(draft)} 启用",
-                        showTrailingChevron = false,
-                        onClick = {},
-                    )
-                    NutTavernGroupDivider()
-                    NutTavernIconRow(
-                        icon = Lucide.Plus,
-                        title = "新建条目",
-                        subtitle = "追加到列表末尾,默认禁用",
-                        showTrailingChevron = false,
-                        onClick = {
-                            val newEntry = newCustomPromptEntry()
-                            draft = draft.appendCustomPrompt(newEntry)
-                            entryEditorTarget = newEntry
-                        },
-                    )
-                }
-            }
-
-            item(key = "prompts-list") {
-                PromptOrderList(
-                    preset = draft,
-                    onChange = { draft = it },
-                    onEditEntry = { entry -> entryEditorTarget = entry },
-                )
-            }
-
-            item(key = "generation-basic") {
-                NutTavernGroupSection {
-                    DoubleField(
-                        label = "温度 (Temperature)",
-                        value = draft.temperature,
-                        onValueChange = { draft = draft.copy(temperature = it) },
-                        supportingText = "0.0 ~ 2.0,越高越发散",
-                        min = 0.0,
-                        max = 2.0,
-                    )
-                    NutTavernGroupDivider()
-                    DoubleField(
-                        label = "Top-P",
-                        value = draft.topP,
-                        onValueChange = { draft = draft.copy(topP = it) },
-                        supportingText = "0.0 ~ 1.0",
-                        min = 0.0,
-                        max = 1.0,
-                    )
-                    NutTavernGroupDivider()
-                    IntField(
-                        label = "最大 Token 数",
-                        value = draft.openaiMaxTokens,
-                        onValueChange = { draft = draft.copy(openaiMaxTokens = it) },
-                        supportingText = "单次回复的 Token 上限",
-                        min = 1,
-                    )
-                    NutTavernGroupDivider()
-                    IntField(
-                        label = "最大上下文",
-                        value = draft.openaiMaxContext,
-                        onValueChange = { draft = draft.copy(openaiMaxContext = it) },
-                        supportingText = "上下文窗口上限,影响裁剪策略",
-                        min = 1,
-                    )
-                }
-            }
-
-            item(key = "generation-advanced-header") {
-                NutTavernExpandableHeader(
-                    title = "高级生成参数",
-                    expanded = advancedGenerationExpanded,
-                    onClick = { advancedGenerationExpanded = !advancedGenerationExpanded },
-                )
-            }
-            if (advancedGenerationExpanded) {
-                item(key = "generation-advanced") {
-                    NutTavernGroupSection {
-                        DoubleField(
-                            label = "频率惩罚 (Frequency penalty)",
-                            value = draft.frequencyPenalty,
-                            onValueChange = { draft = draft.copy(frequencyPenalty = it) },
-                            min = -2.0,
-                            max = 2.0,
-                        )
-                        NutTavernGroupDivider()
-                        DoubleField(
-                            label = "存在惩罚 (Presence penalty)",
-                            value = draft.presencePenalty,
-                            onValueChange = { draft = draft.copy(presencePenalty = it) },
-                            min = -2.0,
-                            max = 2.0,
-                        )
-                        NutTavernGroupDivider()
-                        IntField(
-                            label = "Top-K",
-                            value = draft.topK,
-                            onValueChange = { draft = draft.copy(topK = it) },
-                            min = 0,
-                        )
-                        NutTavernGroupDivider()
-                        DoubleField(
-                            label = "Top-A",
-                            value = draft.topA,
-                            onValueChange = { draft = draft.copy(topA = it) },
-                            min = 0.0,
-                            max = 1.0,
-                        )
-                        NutTavernGroupDivider()
-                        DoubleField(
-                            label = "Min-P",
-                            value = draft.minP,
-                            onValueChange = { draft = draft.copy(minP = it) },
-                            min = 0.0,
-                            max = 1.0,
-                        )
-                        NutTavernGroupDivider()
-                        DoubleField(
-                            label = "重复惩罚 (Repetition penalty)",
-                            value = draft.repetitionPenalty,
-                            onValueChange = { draft = draft.copy(repetitionPenalty = it) },
-                            min = 0.0,
-                            max = 2.0,
-                        )
-                        NutTavernGroupDivider()
-                        IntField(
-                            label = "种子 (Seed)",
-                            value = draft.seed,
-                            onValueChange = { draft = draft.copy(seed = it) },
-                            supportingText = "-1 表示由后端随机",
-                            min = -1,
-                            max = Int.MAX_VALUE,
-                        )
-                        NutTavernGroupDivider()
-                        IntField(
-                            label = "回复条数 (n)",
-                            value = draft.n,
-                            onValueChange = { draft = draft.copy(n = it) },
-                            min = 1,
-                        )
-                    }
-                }
-                item(key = "request-flags") {
-                    NutTavernGroupSection {
-                        SwitchRow(
-                            label = "流式传输",
-                            subtitle = "边生成边显示;关闭后等模型出完整回复再展示",
-                            checked = draft.streamEnabled,
-                            onCheckedChange = { draft = draft.copy(streamEnabled = it) },
-                        )
-                    }
-                }
-            }
-
-            item(key = "composition-header") {
-                NutTavernExpandableHeader(
-                    title = "拼接控制",
-                    expanded = compositionExpanded,
-                    onClick = { compositionExpanded = !compositionExpanded },
-                )
-            }
-            if (compositionExpanded) {
-                item(key = "composition-prompts") {
-                    NutTavernGroupSection {
-                        NutTavernLabeledTextField(
-                            label = "代替角色发言提示词",
-                            value = draft.impersonationPrompt,
-                            onValueChange = { draft = draft.copy(impersonationPrompt = it) },
-                            supportingText = "让模型替你发言时,作为系统指令插入",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "新聊天提示词",
-                            value = draft.newChatPrompt,
-                            onValueChange = { draft = draft.copy(newChatPrompt = it) },
-                            supportingText = "新聊天的首轮上下文提示",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "新群聊提示词",
-                            value = draft.newGroupChatPrompt,
-                            onValueChange = { draft = draft.copy(newGroupChatPrompt = it) },
-                            supportingText = "新群聊的首轮上下文提示",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "新示例聊天提示词",
-                            value = draft.newExampleChatPrompt,
-                            onValueChange = { draft = draft.copy(newExampleChatPrompt = it) },
-                            supportingText = "在角色卡示例对话之间插入的分隔提示",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "续写提示词",
-                            value = draft.continueNudgePrompt,
-                            onValueChange = { draft = draft.copy(continueNudgePrompt = it) },
-                            supportingText = "点续写时,作为系统指令告诉模型继续上一条",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "群聊提示词",
-                            value = draft.groupNudgePrompt,
-                            onValueChange = { draft = draft.copy(groupNudgePrompt = it) },
-                            supportingText = "群聊轮到某个角色发言时,作为系统指令插入",
-                        )
-                    }
-                }
-                item(key = "composition-formats") {
-                    NutTavernGroupSection {
-                        NutTavernLabeledTextField(
-                            label = "场景格式模板",
-                            value = draft.scenarioFormat,
-                            onValueChange = { draft = draft.copy(scenarioFormat = it) },
-                            supportingText = "拼接角色场景段时套用此模板;{{scenario}} 替换为实际内容",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "角色设定格式模板",
-                            value = draft.personalityFormat,
-                            onValueChange = { draft = draft.copy(personalityFormat = it) },
-                            supportingText = "拼接角色性格段时套用此模板;{{personality}} 替换为实际内容",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "世界书格式模板",
-                            value = draft.wiFormat,
-                            onValueChange = { draft = draft.copy(wiFormat = it) },
-                            supportingText = "拼接世界书条目时套用此模板;{0} 替换为条目内容",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "空消息占位",
-                            value = draft.sendIfEmpty,
-                            onValueChange = { draft = draft.copy(sendIfEmpty = it) },
-                            supportingText = "用户消息为空时自动发送的占位文本",
-                        )
-                    }
-                }
-            }
-
-            item(key = "api-behavior-header") {
-                NutTavernExpandableHeader(
-                    title = "API 行为",
-                    expanded = apiBehaviorExpanded,
-                    onClick = { apiBehaviorExpanded = !apiBehaviorExpanded },
-                )
-            }
-            if (apiBehaviorExpanded) {
-                item(key = "api-behavior-1") {
-                    NutTavernGroupSection {
-                        EnumRow(
-                            label = "角色名称行为",
-                            value = draft.namesBehavior.name,
-                            options = com.nuttavern.data.preset.NamesBehavior.entries.map { it.name },
-                            onSelect = { picked ->
-                                draft = draft.copy(
-                                    namesBehavior = com.nuttavern.data.preset.NamesBehavior.valueOf(picked),
-                                )
-                            },
-                            optionLabels = mapOf(
-                                "NONE" to "不携带",
-                                "DEFAULT" to "默认",
-                                "COMPLETION" to "用 name 字段",
-                                "CONTENT" to "拼到内容头部",
-                            ),
-                            optionDescriptions = mapOf(
-                                "NONE" to "完全忽略发言者身份",
-                                "DEFAULT" to "由后端按惯例处理",
-                                "COMPLETION" to "OpenAI 兼容的 name 字段携带",
-                                "CONTENT" to "把名字写在消息内容前面",
-                            ),
-                        )
-                        NutTavernGroupDivider()
-                        EnumRow(
-                            label = "续写后缀",
-                            value = draft.continuePostfix.name,
-                            options = com.nuttavern.data.preset.ContinuePostfix.entries.map { it.name },
-                            onSelect = { picked ->
-                                draft = draft.copy(
-                                    continuePostfix = com.nuttavern.data.preset.ContinuePostfix.valueOf(picked),
-                                )
-                            },
-                            optionLabels = mapOf(
-                                "NONE" to "无",
-                                "SPACE" to "空格",
-                                "NEWLINE" to "换行",
-                                "DOUBLE_NEWLINE" to "双换行",
-                            ),
-                            optionDescriptions = mapOf(
-                                "NONE" to "续写时直接接在原文末尾",
-                                "SPACE" to "原文末尾加一个空格再续写",
-                                "NEWLINE" to "原文末尾换行后续写",
-                                "DOUBLE_NEWLINE" to "原文末尾空一行再续写",
-                            ),
-                        )
-                        NutTavernGroupDivider()
-                        SwitchRow(
-                            label = "续写预填充",
-                            subtitle = "续写时把上一条助手回复作为 prefill 发出去(Claude 风格)",
-                            checked = draft.continuePrefill,
-                            onCheckedChange = { draft = draft.copy(continuePrefill = it) },
-                        )
-                        NutTavernGroupDivider()
-                        SwitchRow(
-                            label = "压缩系统消息",
-                            subtitle = "把所有 system 段合并成一条发送",
-                            checked = draft.squashSystemMessages,
-                            onCheckedChange = { draft = draft.copy(squashSystemMessages = it) },
-                        )
-                        NutTavernGroupDivider()
-                        SwitchRow(
-                            label = "使用系统提示词",
-                            subtitle = "对未明确支持 system role 的后端,把 system 内容包装成 user 消息",
-                            checked = draft.useSysprompt,
-                            onCheckedChange = { draft = draft.copy(useSysprompt = it) },
-                        )
-                    }
-                }
-                item(key = "api-behavior-2") {
-                    NutTavernGroupSection {
-                        SwitchRow(
-                            label = "内联媒体(图片 / 音频)",
-                            subtitle = "把图片 / 音频 base64 拼进消息内容,而不是上传后传 URL",
-                            checked = draft.mediaInlining,
-                            onCheckedChange = { draft = draft.copy(mediaInlining = it) },
-                        )
-                        NutTavernGroupDivider()
-                        SwitchRow(
-                            label = "解锁最大上下文",
-                            subtitle = "无视已知模型上下文上限,直接使用上面的「最大上下文」字段",
-                            checked = draft.maxContextUnlocked,
-                            onCheckedChange = { draft = draft.copy(maxContextUnlocked = it) },
-                        )
-                    }
-                }
-                item(key = "api-behavior-3") {
-                    NutTavernGroupSection {
-                        NutTavernLabeledTextField(
-                            label = "助手预填",
-                            value = draft.assistantPrefill,
-                            onValueChange = { draft = draft.copy(assistantPrefill = it) },
-                            supportingText = "Claude 等支持 prefill 的后端会拼到 assistant 起始",
-                        )
-                        NutTavernGroupDivider()
-                        NutTavernLabeledTextField(
-                            label = "代替角色发言场景的预填",
-                            value = draft.assistantImpersonation,
-                            onValueChange = { draft = draft.copy(assistantImpersonation = it) },
-                            supportingText = "代替角色发言时单独使用的 prefill,留空则沿用上方助手预填",
-                        )
-                    }
-                }
-            }
-
-            item(key = "preset-regex") {
-                NutTavernGroupSection {
-                    NutTavernIconRow(
-                        icon = Lucide.Regex,
-                        title = "预设内嵌正则",
-                        subtitle = "随预设生效的正则规则",
-                        showTrailingChevron = true,
-                        onClick = {
-                            android.widget.Toast.makeText(
-                                context,
-                                "预设内嵌正则编辑 暂未接入",
-                                android.widget.Toast.LENGTH_SHORT,
-                            ).show()
-                        },
-                    )
-                }
-            }
-
-            if (allowDelete) {
-                item(key = "delete") {
-                    NutTavernGroupSection {
-                        NutTavernIconRow(
-                            icon = Lucide.Trash2,
-                            title = "删除预设",
-                            subtitle = "删除后不可恢复",
-                            destructive = true,
-                            onClick = { showDeleteDialog = true },
-                        )
-                    }
-                }
-            }
-        }
     }
+
 
     val entryTarget = entryEditorTarget
     if (entryTarget != null) {
@@ -656,6 +270,15 @@ private fun PresetEditScreenContent(
             } else {
                 {
                     draft = draft.removePrompt(entryTarget.identifier)
+                    entryEditorTarget = null
+                }
+            },
+            // 内置条目不可取消链接;已链接的自定义条目可以取消链接。
+            onUnlink = if (entryTarget.identifier in BUILT_IN_PROMPT_IDS) {
+                null
+            } else {
+                {
+                    draft = draft.unlinkPrompt(entryTarget.identifier)
                     entryEditorTarget = null
                 }
             },
@@ -1136,3 +759,336 @@ private val PresetSaver: Saver<Preset, String> = Saver(
         }
     },
 )
+
+// region Tab 内容
+
+/**
+ * 条目 Tab:名称/描述 + 已链接条目列表(可拖排序+Switch) + 未链接条目列表(链接按钮)。
+ */
+@Composable
+private fun PromptsTabContent(
+    draft: Preset,
+    onDraftChange: (Preset) -> Unit,
+    onEditEntry: (PromptEntry) -> Unit,
+) {
+    val globalOrder = draft.promptOrder
+        .firstOrNull { it.characterId == PromptOrderForCharacter.GLOBAL_CHARACTER_ID }
+        ?.order ?: emptyList()
+    val linkedIds = globalOrder.map { it.identifier }.toSet()
+    val unlinkedEntries = draft.prompts.filter { it.identifier !in linkedIds }
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
+    ) {
+        item(key = "basic") {
+            NutTavernGroupSection {
+                NutTavernLabeledTextField(
+                    label = "名称",
+                    value = draft.name,
+                    onValueChange = { onDraftChange(draft.copy(name = it)) },
+                    placeholder = "如「主预设」「角色扮演」",
+                    singleLine = true,
+                    isError = draft.name.isBlank(),
+                    supportingText = if (draft.name.isBlank()) "名称不能为空" else null,
+                )
+                NutTavernGroupDivider()
+                NutTavernLabeledTextField(
+                    label = "描述",
+                    value = draft.description,
+                    onValueChange = { onDraftChange(draft.copy(description = it)) },
+                    placeholder = "可选,仅本地展示",
+                    minLines = 1,
+                )
+            }
+        }
+
+        item(key = "prompts-header") {
+            NutTavernGroupSection {
+                NutTavernIconRow(
+                    icon = Lucide.Pencil,
+                    title = "已链接条目",
+                    subtitle = "${globalOrder.size} 条 · ${globalOrder.count { it.enabled }} 启用",
+                    showTrailingChevron = false,
+                    onClick = {},
+                )
+                NutTavernGroupDivider()
+                NutTavernIconRow(
+                    icon = Lucide.Plus,
+                    title = "新建条目",
+                    subtitle = "追加到末尾,默认禁用",
+                    showTrailingChevron = false,
+                    onClick = {
+                        val newEntry = newCustomPromptEntry()
+                        onDraftChange(draft.appendCustomPrompt(newEntry))
+                        onEditEntry(newEntry)
+                    },
+                )
+            }
+        }
+
+        item(key = "prompts-list") {
+            PromptOrderList(
+                preset = draft,
+                onChange = onDraftChange,
+                onEditEntry = onEditEntry,
+            )
+        }
+
+        if (unlinkedEntries.isNotEmpty()) {
+            item(key = "unlinked-header") {
+                NutTavernGroupSection {
+                    NutTavernIconRow(
+                        icon = Lucide.Regex,
+                        title = "未链接条目",
+                        subtitle = "${unlinkedEntries.size} 条,不参与拼接",
+                        showTrailingChevron = false,
+                        onClick = {},
+                    )
+                }
+            }
+            item(key = "unlinked-list") {
+                Surface(
+                    shape = MaterialTheme.shapes.large,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Column {
+                        unlinkedEntries.forEachIndexed { index, entry ->
+                            key(entry.identifier) {
+                                UnlinkedPromptRow(
+                                    entry = entry,
+                                    onLink = { onDraftChange(draft.linkPrompt(entry.identifier)) },
+                                    onEdit = { onEditEntry(entry) },
+                                )
+                                if (index < unlinkedEntries.lastIndex) NutTavernGroupDivider()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 设置 Tab:生成参数 / 高级 / 拼接控制 / API 行为 / 预设正则 / 删除。
+ */
+@Composable
+private fun SettingsTabContent(
+    draft: Preset,
+    onDraftChange: (Preset) -> Unit,
+    allowDelete: Boolean,
+    advancedGenerationExpanded: Boolean,
+    onAdvancedGenerationExpandedChange: (Boolean) -> Unit,
+    compositionExpanded: Boolean,
+    onCompositionExpandedChange: (Boolean) -> Unit,
+    apiBehaviorExpanded: Boolean,
+    onApiBehaviorExpandedChange: (Boolean) -> Unit,
+    onShowDeleteDialog: () -> Unit,
+    context: android.content.Context,
+) {
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
+    ) {
+        item(key = "generation-basic") {
+            NutTavernGroupSection {
+                DoubleField(
+                    label = "温度 (Temperature)",
+                    value = draft.temperature,
+                    onValueChange = { onDraftChange(draft.copy(temperature = it)) },
+                    supportingText = "0.0 ~ 2.0,越高越发散",
+                    min = 0.0,
+                    max = 2.0,
+                )
+                NutTavernGroupDivider()
+                DoubleField(
+                    label = "Top-P",
+                    value = draft.topP,
+                    onValueChange = { onDraftChange(draft.copy(topP = it)) },
+                    supportingText = "0.0 ~ 1.0",
+                    min = 0.0,
+                    max = 1.0,
+                )
+                NutTavernGroupDivider()
+                IntField(
+                    label = "最大 Token 数",
+                    value = draft.openaiMaxTokens,
+                    onValueChange = { onDraftChange(draft.copy(openaiMaxTokens = it)) },
+                    supportingText = "单次回复的 Token 上限",
+                    min = 1,
+                )
+                NutTavernGroupDivider()
+                IntField(
+                    label = "最大上下文",
+                    value = draft.openaiMaxContext,
+                    onValueChange = { onDraftChange(draft.copy(openaiMaxContext = it)) },
+                    supportingText = "上下文窗口上限,影响裁剪策略",
+                    min = 1,
+                )
+            }
+        }
+
+        item(key = "generation-advanced-header") {
+            NutTavernExpandableHeader(
+                title = "高级生成参数",
+                expanded = advancedGenerationExpanded,
+                onClick = { onAdvancedGenerationExpandedChange(!advancedGenerationExpanded) },
+            )
+        }
+        if (advancedGenerationExpanded) {
+            item(key = "generation-advanced") {
+                NutTavernGroupSection {
+                    DoubleField(label = "频率惩罚", value = draft.frequencyPenalty, onValueChange = { onDraftChange(draft.copy(frequencyPenalty = it)) }, min = -2.0, max = 2.0)
+                    NutTavernGroupDivider()
+                    DoubleField(label = "存在惩罚", value = draft.presencePenalty, onValueChange = { onDraftChange(draft.copy(presencePenalty = it)) }, min = -2.0, max = 2.0)
+                    NutTavernGroupDivider()
+                    IntField(label = "Top-K", value = draft.topK, onValueChange = { onDraftChange(draft.copy(topK = it)) }, min = 0)
+                    NutTavernGroupDivider()
+                    DoubleField(label = "Top-A", value = draft.topA, onValueChange = { onDraftChange(draft.copy(topA = it)) }, min = 0.0, max = 1.0)
+                    NutTavernGroupDivider()
+                    DoubleField(label = "Min-P", value = draft.minP, onValueChange = { onDraftChange(draft.copy(minP = it)) }, min = 0.0, max = 1.0)
+                    NutTavernGroupDivider()
+                    DoubleField(label = "重复惩罚", value = draft.repetitionPenalty, onValueChange = { onDraftChange(draft.copy(repetitionPenalty = it)) }, min = 0.0, max = 2.0)
+                    NutTavernGroupDivider()
+                    IntField(label = "种子 (Seed)", value = draft.seed, onValueChange = { onDraftChange(draft.copy(seed = it)) }, supportingText = "-1 表示由后端随机", min = -1, max = Int.MAX_VALUE)
+                    NutTavernGroupDivider()
+                    IntField(label = "回复条数 (n)", value = draft.n, onValueChange = { onDraftChange(draft.copy(n = it)) }, min = 1)
+                }
+            }
+            item(key = "request-flags") {
+                NutTavernGroupSection {
+                    SwitchRow(label = "流式传输", subtitle = "边生成边显示;关闭后等模型出完整回复再展示", checked = draft.streamEnabled, onCheckedChange = { onDraftChange(draft.copy(streamEnabled = it)) })
+                }
+            }
+        }
+
+        item(key = "composition-header") {
+            NutTavernExpandableHeader(title = "拼接控制", expanded = compositionExpanded, onClick = { onCompositionExpandedChange(!compositionExpanded) })
+        }
+        if (compositionExpanded) {
+            item(key = "composition-prompts") {
+                NutTavernGroupSection {
+                    NutTavernLabeledTextField(label = "代替角色发言提示词", value = draft.impersonationPrompt, onValueChange = { onDraftChange(draft.copy(impersonationPrompt = it)) }, supportingText = "让模型替你发言时,作为系统指令插入")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "新聊天提示词", value = draft.newChatPrompt, onValueChange = { onDraftChange(draft.copy(newChatPrompt = it)) }, supportingText = "新聊天的首轮上下文提示")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "新群聊提示词", value = draft.newGroupChatPrompt, onValueChange = { onDraftChange(draft.copy(newGroupChatPrompt = it)) }, supportingText = "新群聊的首轮上下文提示")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "新示例聊天提示词", value = draft.newExampleChatPrompt, onValueChange = { onDraftChange(draft.copy(newExampleChatPrompt = it)) }, supportingText = "在角色卡示例对话之间插入的分隔提示")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "续写提示词", value = draft.continueNudgePrompt, onValueChange = { onDraftChange(draft.copy(continueNudgePrompt = it)) }, supportingText = "续写时追加到末尾的提示")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "群聊提示词", value = draft.groupNudgePrompt, onValueChange = { onDraftChange(draft.copy(groupNudgePrompt = it)) }, supportingText = "群聊中指定下一个发言角色的提示")
+                }
+            }
+            item(key = "composition-formats") {
+                NutTavernGroupSection {
+                    NutTavernLabeledTextField(label = "场景格式模板", value = draft.scenarioFormat, onValueChange = { onDraftChange(draft.copy(scenarioFormat = it)) }, supportingText = "拼接角色场景段时套用;{{scenario}} 替换为实际内容")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "性格格式模板", value = draft.personalityFormat, onValueChange = { onDraftChange(draft.copy(personalityFormat = it)) }, supportingText = "拼接角色性格段时套用;{{personality}} 替换为实际内容")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "世界书格式模板", value = draft.wiFormat, onValueChange = { onDraftChange(draft.copy(wiFormat = it)) }, supportingText = "拼接世界书条目时套用;{0} 替换为条目内容")
+                    NutTavernGroupDivider()
+                    EnumRow(label = "名称行为", value = draft.namesBehavior.name.lowercase(), options = listOf("none", "default", "completion", "content"), onSelect = { onDraftChange(draft.copy(namesBehavior = NamesBehavior.valueOf(it.uppercase()))) }, optionLabels = mapOf("none" to "不添加", "default" to "默认", "completion" to "补全模式", "content" to "消息内容"), optionDescriptions = mapOf("none" to "不在消息里加名字", "default" to "由后端决定", "completion" to "名字加在 content 开头", "content" to "用 name 字段传递"))
+                    NutTavernGroupDivider()
+                    EnumRow(label = "续写后缀", value = draft.continuePostfix.name.lowercase(), options = listOf("none", "space", "newline", "double_newline"), onSelect = { onDraftChange(draft.copy(continuePostfix = ContinuePostfix.valueOf(it.uppercase()))) }, optionLabels = mapOf("none" to "无", "space" to "空格", "newline" to "换行", "double_newline" to "双换行"), optionDescriptions = mapOf("none" to "续写时不加后缀", "space" to "加一个空格", "newline" to "加一个换行", "double_newline" to "加两个换行"))
+                }
+            }
+        }
+
+        item(key = "api-behavior-header") {
+            NutTavernExpandableHeader(title = "API 行为", expanded = apiBehaviorExpanded, onClick = { onApiBehaviorExpandedChange(!apiBehaviorExpanded) })
+        }
+        if (apiBehaviorExpanded) {
+            item(key = "api-behavior-1") {
+                NutTavernGroupSection {
+                    SwitchRow(label = "续写预填", subtitle = "续写时把已有文本作为 assistant prefill 发送", checked = draft.continuePrefill, onCheckedChange = { onDraftChange(draft.copy(continuePrefill = it)) })
+                    NutTavernGroupDivider()
+                    SwitchRow(label = "压缩系统消息", subtitle = "把连续的 system 消息合并成一条", checked = draft.squashSystemMessages, onCheckedChange = { onDraftChange(draft.copy(squashSystemMessages = it)) })
+                    NutTavernGroupDivider()
+                    SwitchRow(label = "使用系统提示词", subtitle = "把 system 内容放到 API 的 system 字段", checked = draft.useSysprompt, onCheckedChange = { onDraftChange(draft.copy(useSysprompt = it)) })
+                    NutTavernGroupDivider()
+                    SwitchRow(label = "内联媒体", subtitle = "把图片/音频 base64 拼进消息内容", checked = draft.mediaInlining, onCheckedChange = { onDraftChange(draft.copy(mediaInlining = it)) })
+                    NutTavernGroupDivider()
+                    SwitchRow(label = "解锁最大上下文", subtitle = "无视已知模型上下文上限", checked = draft.maxContextUnlocked, onCheckedChange = { onDraftChange(draft.copy(maxContextUnlocked = it)) })
+                }
+            }
+            item(key = "api-behavior-2") {
+                NutTavernGroupSection {
+                    NutTavernLabeledTextField(label = "助手预填", value = draft.assistantPrefill, onValueChange = { onDraftChange(draft.copy(assistantPrefill = it)) }, supportingText = "Claude 等支持 prefill 的后端会拼到 assistant 起始")
+                    NutTavernGroupDivider()
+                    NutTavernLabeledTextField(label = "代替角色发言场景的预填", value = draft.assistantImpersonation, onValueChange = { onDraftChange(draft.copy(assistantImpersonation = it)) }, supportingText = "代替角色发言时单独使用的 prefill,留空则沿用上方助手预填")
+                }
+            }
+        }
+
+        item(key = "preset-regex") {
+            NutTavernGroupSection {
+                NutTavernIconRow(icon = Lucide.Regex, title = "预设内嵌正则", subtitle = "随预设生效的正则规则", showTrailingChevron = true, onClick = { android.widget.Toast.makeText(context, "预设内嵌正则编辑 暂未接入", android.widget.Toast.LENGTH_SHORT).show() })
+            }
+        }
+
+        if (allowDelete) {
+            item(key = "delete") {
+                NutTavernGroupSection {
+                    NutTavernIconRow(icon = Lucide.Trash2, title = "删除预设", subtitle = "删除后不可恢复", destructive = true, onClick = onShowDeleteDialog)
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 未链接条目行。与已链接条目视觉对齐,但 Switch 位置换成"链接"按钮。
+ */
+@Composable
+private fun UnlinkedPromptRow(
+    entry: PromptEntry,
+    onLink: () -> Unit,
+    onEdit: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        onClick = onEdit,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = entry.name.ifBlank { entry.identifier },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = promptEntrySubtitle(entry),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            TextButton(onClick = onLink) { Text("链接") }
+        }
+    }
+}
+
+// endregion
