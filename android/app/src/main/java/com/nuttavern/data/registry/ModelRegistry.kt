@@ -1,0 +1,552 @@
+package com.nuttavern.data.registry
+
+import com.nuttavern.data.model.Modality
+import com.nuttavern.data.model.ModelAbility
+
+/**
+ * 模型能力命中清单。给一个模型 id,推断它的输入 / 输出模态和能力。
+ *
+ * 数据来自对 rikkahub `me.rerere.ai.registry.ModelRegistry` 的快照。**约定**:这一份是
+ * 自有快照,后续上新模型由我们自己更新,不打算与 upstream 合并。规则按"先窄后宽"组织,
+ * 例如 `gpt-5-3` 这种特化规则要排在 `gpt-5` 之前;否则 [resolveModels] 会用最高分覆盖。
+ *
+ * 推荐通过 [inferAll] 一次性拿三个字段,避免分开调用三次产生不一致(理论上不会,但更省心)。
+ */
+object ModelRegistry {
+    // ── OpenAI 系列 ───────────────────────────────────
+
+    private val GPT4O = defineModel {
+        tokens("gpt", "4", "o")
+        visionInput()
+        toolAbility()
+    }
+
+    private val GPT_4_1 = defineModel {
+        tokens("gpt", "4", "1")
+        visionInput()
+        toolAbility()
+    }
+
+    val OPENAI_O_MODELS = defineModel {
+        tokens(tokenRegex("^o$"), tokenRegex("^\\d+$"))
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_OSS = defineModel {
+        tokens("gpt", "oss")
+        toolReasoningAbility()
+    }
+
+    val GPT_5 = defineModel {
+        tokens("gpt", "5")
+        notTokens("gpt", "5", ".")
+        notTokens("gpt", "5", "chat")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_1 = defineModel {
+        tokens("gpt", "5", "1")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_2 = defineModel {
+        tokens("gpt", "5", "2")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_3 = defineModel {
+        tokens("gpt", "5", "3")
+        visionInput()
+        toolAbility()
+    }
+
+    private val GPT_5_4 = defineModel {
+        tokens("gpt", "5", "4")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_4_MINI = defineModel {
+        tokens("gpt", "5", "4", "mini")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_4_NANO = defineModel {
+        tokens("gpt", "5", "4", "nano")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GPT_5_5 = defineModel {
+        tokens("gpt", "5", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    // ── Gemini ────────────────────────────────────────
+
+    private val GEMINI_20_FLASH = defineModel {
+        tokens("gemini", "2", "0", "flash")
+        visionInput()
+        toolAbility()
+    }
+
+    val GEMINI_2_5_FLASH = defineModel {
+        tokens("gemini", "2", "5", "flash")
+        notTokens("image")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_2_5_PRO = defineModel {
+        tokens("gemini", "2", "5", "pro")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_2_5_IMAGE = defineModel {
+        tokens("gemini", "2", "5", "flash", "image")
+        visionInput()
+        imageOutput()
+    }
+
+    val GEMINI_3_PRO_IMAGE = defineModel {
+        tokens("gemini", "3", "pro", "image")
+        visionInput()
+        imageOutput()
+    }
+
+    val GEMINI_NANO_BANANA = defineModel {
+        tokens("nano", "banana")
+        visionInput()
+        imageOutput()
+    }
+
+    val GEMINI_3_PRO = defineModel {
+        tokens("gemini", "3", "pro")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_3_FLASH = defineModel {
+        tokens("gemini", "3", "flash")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_3_1_PRO_PREVIEW = defineModel {
+        tokens("gemini", "3", "1", "pro", "preview")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_3_1_FLASH_IMAGE = defineModel {
+        tokens("gemini", "3", "1", "flash", "image")
+        visionInput()
+        imageOutput()
+        reasoningAbility()
+    }
+
+    val GEMINI_FLASH_LATEST = defineModel {
+        exact("gemini-flash-latest")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_PRO_LATEST = defineModel {
+        exact("gemini-pro-latest")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val GEMINI_LATEST = defineGroup {
+        add(GEMINI_FLASH_LATEST, GEMINI_PRO_LATEST)
+    }
+
+    val GEMINI_3_SERIES = defineGroup {
+        add(GEMINI_3_PRO, GEMINI_3_FLASH, GEMINI_3_1_PRO_PREVIEW)
+    }
+
+    val GEMINI_SERIES = defineGroup {
+        add(GEMINI_20_FLASH, GEMINI_2_5_FLASH, GEMINI_2_5_PRO, GEMINI_3_SERIES, GEMINI_LATEST)
+    }
+
+    // ── Claude ────────────────────────────────────────
+
+    private val CLAUDE_SONNET_3_5 = defineModel {
+        tokens("claude", "3", "5", "sonnet")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_SONNET_3_7 = defineModel {
+        tokens("claude", "3", "7", "sonnet")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_4 = defineModel {
+        tokens("claude", "4")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val CLAUDE_4_5 = defineModel {
+        tokens("claude", "4", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_SONNET_4_6 = defineModel {
+        tokens("claude", "sonnet", "4", "6")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_OPUS_4_6 = defineModel {
+        tokens("claude", "opus", "4", "6")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val CLAUDE_OPUS_4_7 = defineModel {
+        tokens("claude", "opus", "4", "7")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    val CLAUDE_SERIES = defineGroup {
+        add(CLAUDE_SONNET_3_5, CLAUDE_SONNET_3_7, CLAUDE_4, CLAUDE_4_5, CLAUDE_SONNET_4_6, CLAUDE_OPUS_4_6, CLAUDE_OPUS_4_7)
+    }
+
+    // ── DeepSeek ──────────────────────────────────────
+
+    private val DEEPSEEK_V3_MODEL = defineModel {
+        tokens("deepseek", "v", "3")
+        toolAbility()
+    }
+
+    private val DEEPSEEK_CHAT = defineModel {
+        tokens("deepseek", "chat")
+        toolAbility()
+    }
+
+    private val DEEPSEEK_R1_MODEL = defineModel {
+        tokens("deepseek", "r", "1")
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_REASONER = defineModel {
+        tokens("deepseek", "reasoner")
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_V4_FLASH = defineModel {
+        tokens("deepseek", "v", "4", "flash")
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_V4_PRO = defineModel {
+        tokens("deepseek", "v", "4", "pro")
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_V3_1 = defineModel {
+        tokens("deepseek", "v", "3", "1")
+        toolReasoningAbility()
+    }
+
+    private val DEEPSEEK_V3_2 = defineModel {
+        tokens("deepseek", "v", "3", "2")
+        toolReasoningAbility()
+    }
+
+    // ── Qwen / Doubao / Grok / Kimi / Step / Intern / GLM / Minimax / Mimo ──
+
+    private val QWEN_3 = defineModel {
+        tokens("qwen", "3")
+        toolReasoningAbility()
+    }
+
+    private val QWEN_3_5 = defineModel {
+        tokens("qwen", "3", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val QWEN_3_6 = defineModel {
+        tokens("qwen", "3", "6")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val DOUBAO_1_6 = defineModel {
+        tokens("doubao", "1", "6")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val DOUBAO_1_8 = defineModel {
+        tokens("doubao", "1", "8")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GROK_4 = defineModel {
+        tokens("grok", "4")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val KIMI_K2 = defineModel {
+        tokens("kimi", "k", "2")
+        toolReasoningAbility()
+    }
+
+    private val KIMI_K2_5 = defineModel {
+        tokens("kimi", "k", "2", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val KIMI_K2_6 = defineModel {
+        tokens("kimi", "k", "2", "6")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val STEP_3 = defineModel {
+        tokens("step", "3")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val INTERN_S1 = defineModel {
+        tokens("intern", "s", "1")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val GLM_4_5 = defineModel {
+        tokens("glm", "4", "5")
+        toolReasoningAbility()
+    }
+
+    private val GLM_4_6 = defineModel {
+        tokens("glm", "4", "6")
+        toolReasoningAbility()
+    }
+
+    private val GLM_4_7 = defineModel {
+        tokens("glm", "4", "7")
+        toolReasoningAbility()
+    }
+
+    private val GLM_5 = defineModel {
+        tokens("glm", "5")
+        toolReasoningAbility()
+    }
+
+    private val GLM_5_1 = defineModel {
+        tokens("glm", "5", "1")
+        toolReasoningAbility()
+    }
+
+    private val MINIMAX_M2 = defineModel {
+        tokens("minimax", "m", "2")
+        toolReasoningAbility()
+    }
+
+    private val MINIMAX_M2_5 = defineModel {
+        tokens("minimax", "m", "2", "5")
+        toolReasoningAbility()
+    }
+
+    private val MINIMAX_M2_7 = defineModel {
+        tokens("minimax", "m", "2", "7")
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V2 = defineModel {
+        tokens("mimo", "v", "2")
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V2_PRO = defineModel {
+        tokens("mimo", "v", "2", "pro")
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V2_5 = defineModel {
+        tokens("mimo", "v", "2", "5")
+        visionInput()
+        toolReasoningAbility()
+    }
+
+    private val XIAOMI_MIMO_V2_5_PRO = defineModel {
+        tokens("mimo", "v", "2", "5", "pro")
+        toolReasoningAbility()
+    }
+
+    val QWEN_MT = defineModel {
+        tokens("qwen", "mt")
+    }
+
+    private val ALL_MODELS: List<ModelDefinition> = listOf(
+        GPT4O,
+        GPT_4_1,
+        OPENAI_O_MODELS,
+        GPT_OSS,
+        GPT_5,
+        GPT_5_1,
+        GPT_5_2,
+        GPT_5_3,
+        GPT_5_4,
+        GPT_5_4_MINI,
+        GPT_5_4_NANO,
+        GPT_5_5,
+        GEMINI_20_FLASH,
+        GEMINI_2_5_FLASH,
+        GEMINI_2_5_PRO,
+        GEMINI_2_5_IMAGE,
+        GEMINI_3_PRO_IMAGE,
+        GEMINI_NANO_BANANA,
+        GEMINI_3_PRO,
+        GEMINI_3_FLASH,
+        GEMINI_3_1_PRO_PREVIEW,
+        GEMINI_3_1_FLASH_IMAGE,
+        GEMINI_FLASH_LATEST,
+        GEMINI_PRO_LATEST,
+        CLAUDE_SONNET_3_5,
+        CLAUDE_SONNET_3_7,
+        CLAUDE_4,
+        CLAUDE_4_5,
+        CLAUDE_SONNET_4_6,
+        CLAUDE_OPUS_4_6,
+        CLAUDE_OPUS_4_7,
+        DEEPSEEK_V3_MODEL,
+        DEEPSEEK_CHAT,
+        DEEPSEEK_R1_MODEL,
+        DEEPSEEK_REASONER,
+        DEEPSEEK_V4_FLASH,
+        DEEPSEEK_V4_PRO,
+        DEEPSEEK_V3_1,
+        DEEPSEEK_V3_2,
+        QWEN_3,
+        QWEN_3_5,
+        QWEN_3_6,
+        DOUBAO_1_6,
+        DOUBAO_1_8,
+        GROK_4,
+        KIMI_K2,
+        KIMI_K2_5,
+        KIMI_K2_6,
+        STEP_3,
+        INTERN_S1,
+        GLM_4_5,
+        GLM_4_6,
+        GLM_4_7,
+        GLM_5,
+        GLM_5_1,
+        MINIMAX_M2,
+        MINIMAX_M2_5,
+        MINIMAX_M2_7,
+        XIAOMI_MIMO_V2,
+        XIAOMI_MIMO_V2_PRO,
+        XIAOMI_MIMO_V2_5,
+        XIAOMI_MIMO_V2_5_PRO,
+        QWEN_MT,
+    )
+
+    /**
+     * 一次性推断三件:输入模态、输出模态、能力。优先用本接口,而不是调三次单字段。
+     */
+    fun inferAll(modelId: String): InferredCapabilities {
+        val matched = resolveModels(modelId)
+        return InferredCapabilities(
+            inputModalities = mergeModalities(matched) { it.inputModalities },
+            outputModalities = mergeModalities(matched) { it.outputModalities },
+            abilities = mergeAbilities(matched),
+        )
+    }
+
+    fun inferInputModalities(modelId: String): List<Modality> =
+        mergeModalities(resolveModels(modelId)) { it.inputModalities }
+
+    fun inferOutputModalities(modelId: String): List<Modality> =
+        mergeModalities(resolveModels(modelId)) { it.outputModalities }
+
+    fun inferAbilities(modelId: String): List<ModelAbility> =
+        mergeAbilities(resolveModels(modelId))
+
+    private fun resolveModels(modelId: String): List<ModelDefinition> {
+        var bestScore: Int? = null
+        val matches = mutableListOf<ModelDefinition>()
+        for (model in ALL_MODELS) {
+            val score = model.matchScore(modelId) ?: continue
+            when {
+                bestScore == null || score > bestScore -> {
+                    bestScore = score
+                    matches.clear()
+                    matches.add(model)
+                }
+
+                score == bestScore -> matches.add(model)
+            }
+        }
+        return matches
+    }
+
+    private fun mergeModalities(
+        matched: List<ModelDefinition>,
+        selector: (ModelDefinition) -> Set<Modality>,
+    ): List<Modality> {
+        val merged = matched.flatMap(selector).toSet()
+        return if (merged.isEmpty()) {
+            listOf(Modality.TEXT)
+        } else {
+            // 输出顺序固定 TEXT 在前,IMAGE 在后,避免存盘后顺序漂移引发 diff。
+            listOf(Modality.TEXT, Modality.IMAGE).filter { it in merged }
+        }
+    }
+
+    private fun mergeAbilities(matched: List<ModelDefinition>): List<ModelAbility> {
+        val merged = matched.flatMap { it.abilities }.toSet()
+        return buildList {
+            if (ModelAbility.TOOL in merged) add(ModelAbility.TOOL)
+            if (ModelAbility.REASONING in merged) add(ModelAbility.REASONING)
+        }
+    }
+}
+
+/** [ModelRegistry.inferAll] 的返回类型。 */
+data class InferredCapabilities(
+    val inputModalities: List<Modality>,
+    val outputModalities: List<Modality>,
+    val abilities: List<ModelAbility>,
+)
+
+private fun ModelDefinitionBuilder.visionInput() {
+    input(Modality.TEXT, Modality.IMAGE)
+}
+
+private fun ModelDefinitionBuilder.imageOutput() {
+    output(Modality.TEXT, Modality.IMAGE)
+}
+
+private fun ModelDefinitionBuilder.toolAbility() {
+    ability(ModelAbility.TOOL)
+}
+
+private fun ModelDefinitionBuilder.reasoningAbility() {
+    ability(ModelAbility.REASONING)
+}
+
+private fun ModelDefinitionBuilder.toolReasoningAbility() {
+    ability(ModelAbility.TOOL, ModelAbility.REASONING)
+}

@@ -1,0 +1,5 @@
+Provider icons in this directory are vendored from lobehub/lobe-icons,
+package @lobehub/icons-static-svg version 1.90.0.
+
+Source: https://github.com/lobehub/lobe-icons
+License: MIT

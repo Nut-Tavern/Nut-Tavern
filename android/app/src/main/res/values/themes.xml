@@ -1,0 +1,8 @@
+<resources>
+    <style name="Theme.NutTavern" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorBackground">#161616</item>
+        <item name="android:statusBarColor">#161616</item>
+        <item name="android:navigationBarColor">#161616</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,42 @@
+﻿# Gradle / Android build outputs
+.gradle/
+.kotlin/
+build/
+**/build/
+
+# Local Android tooling
+local.properties
+*.orig.*
+
+# Signing and secrets
+*.jks
+*.p8
+*.p12
+*.key
+*.keystore
+*.mobileprovision
+*.pem
+.env
+.env.*
+
+# IDE / OS
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Legacy Expo / Node artifacts, kept ignored if recreated
+node_modules/
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.tsbuildinfo
+
+# Development-only files (not shipped to repo)
+AGENTS.md
+docs/
+*.apk
