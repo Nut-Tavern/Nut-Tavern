@@ -32,11 +32,11 @@ import com.nuttavern.ui.components.NutTavernEntityStatusPill
 internal fun PresetCard(
     preset: Preset,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
     elevated: Boolean = false,
     isDefault: Boolean = false,
     isCurrent: Boolean = false,
-    editButton: (@Composable () -> Unit)? = null,
     dragHandle: (@Composable () -> Unit)? = null,
 ) {
     NutTavernEntityCard(
@@ -45,6 +45,7 @@ internal fun PresetCard(
         subtitle = presetSubtitleDisplay(preset),
         elevated = elevated,
         onClick = onClick,
+        onLongClick = onLongClick,
         modifier = modifier,
         trailing = {
             when {
@@ -59,21 +60,8 @@ internal fun PresetCard(
                     content = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
             }
-            editButton?.invoke()
             dragHandle?.invoke()
         },
-    )
-}
-
-/**
- * 预设铅笔编辑按钮。包了一层是为了承载"编辑预设"的 contentDescription 语义,
- * 下层视觉规格走 [NutTavernEntityEditIconButton] 公共组件。
- */
-@Composable
-internal fun PresetEditIconButton(onClick: () -> Unit) {
-    NutTavernEntityEditIconButton(
-        onClick = onClick,
-        contentDescription = "编辑预设",
     )
 }
 

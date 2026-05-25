@@ -142,6 +142,10 @@ fun RegexListScreen(
                     onOrphanClick = onOpenRegexDetail,
                     onToggleGroup = { id, enabled -> viewModel.toggleGroupEnabled(id, enabled) },
                     onToggleOrphan = { id, disabled -> viewModel.toggleOrphanEnabled(id, disabled) },
+                    onDuplicateGroup = { id -> viewModel.duplicateGroup(id) },
+                    onDuplicateOrphan = { id -> viewModel.duplicateOrphan(id) },
+                    onDeleteGroup = { id -> viewModel.deleteGroup(id) },
+                    onDeleteOrphan = { id -> viewModel.deleteOrphan(id) },
                     onCommitOrder = { orderedIds -> viewModel.reorderTopLevel(orderedIds) },
                 )
             }
@@ -194,6 +198,7 @@ private fun RegexSearchBar(value: String, onValueChange: (String) -> Unit) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun RegexTopLevelList(
     items: List<RegexScriptViewModel.TopLevelItem>,
@@ -202,8 +207,14 @@ private fun RegexTopLevelList(
     onOrphanClick: (String) -> Unit,
     onToggleGroup: (id: String, enabled: Boolean) -> Unit,
     onToggleOrphan: (id: String, disabled: Boolean) -> Unit,
+    onDuplicateGroup: (id: String) -> Unit,
+    onDuplicateOrphan: (id: String) -> Unit,
+    onDeleteGroup: (id: String) -> Unit,
+    onDeleteOrphan: (id: String) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var longPressTarget by remember { mutableStateOf<LongPressTarget?>(null) }
     var localOrder by remember { mutableStateOf(items) }
     LaunchedEffect(items) {
         val localIds = localOrder.map { it.id }.toSet()
@@ -231,26 +242,26 @@ private fun RegexTopLevelList(
             ReorderableItem(state = reorderState, key = item.id) { isDragging ->
                 if (item.isGroup) {
                     val group = item.group ?: return@ReorderableItem
-                    RegexGroupCard(
-                        name = group.name,
-                        scriptCount = group.scripts.size,
-                        enabled = group.enabled,
+                    com.nuttavern.ui.components.NutTavernEntityCard(
+                        title = group.name,
+                        titleFallback = "未命名规则组",
+                        subtitle = if (group.scripts.isEmpty()) "暂无规则" else "共 ${group.scripts.size} 条规则",
                         elevated = isDragging,
-                        onEnter = { onGroupClick(group.id) },
-                        onToggleEnabled = { onToggleGroup(group.id, it) },
-                        dragHandle = {
+                        onClick = { onGroupClick(group.id) },
+                        onLongClick = { longPressTarget = LongPressTarget.Group(group.id, group.name, group.enabled) },
+                        trailing = {
+                            if (group.enabled) {
+                                com.nuttavern.ui.components.NutTavernEntityStatusPill(
+                                    label = "启用",
+                                    container = MaterialTheme.colorScheme.primaryContainer,
+                                    content = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                            }
                             if (reorderable) {
-                                Icon(
-                                    imageVector = Lucide.GripVertical,
-                                    contentDescription = "拖动排序",
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .draggableHandle(
-                                            onDragStopped = {
-                                                onCommitOrder(localOrder.map { it.id })
-                                            },
-                                        ),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                com.nuttavern.ui.components.NutTavernEntityDragHandle(
+                                    modifier = Modifier.draggableHandle(
+                                        onDragStopped = { onCommitOrder(localOrder.map { it.id }) },
+                                    ),
                                 )
                             } else {
                                 Spacer(Modifier.size(20.dp))
@@ -259,114 +270,117 @@ private fun RegexTopLevelList(
                     )
                 } else {
                     val script = item.orphan ?: return@ReorderableItem
-                    RegexScriptCard(
-                        name = script.scriptName,
+                    com.nuttavern.ui.components.NutTavernEntityCard(
+                        title = script.scriptName,
+                        titleFallback = "未命名规则",
                         subtitle = regexScriptSubtitle(script),
-                        enabled = !script.disabled,
-                        showSwitch = true,
                         elevated = isDragging,
-                        onEdit = { onOrphanClick(script.id) },
-                        onToggleEnabled = { enabled -> onToggleOrphan(script.id, !enabled) },
-                        dragHandle = {
+                        onClick = { onOrphanClick(script.id) },
+                        onLongClick = { longPressTarget = LongPressTarget.Orphan(script.id, script.scriptName, !script.disabled) },
+                        trailing = {
+                            if (!script.disabled) {
+                                com.nuttavern.ui.components.NutTavernEntityStatusPill(
+                                    label = "启用",
+                                    container = MaterialTheme.colorScheme.primaryContainer,
+                                    content = MaterialTheme.colorScheme.onPrimaryContainer,
+                                )
+                            }
                             if (reorderable) {
-                                Icon(
-                                    imageVector = Lucide.GripVertical,
-                                    contentDescription = "拖动排序",
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .draggableHandle(
-                                            onDragStopped = {
-                                                onCommitOrder(localOrder.map { it.id })
-                                            },
-                                        ),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                com.nuttavern.ui.components.NutTavernEntityDragHandle(
+                                    modifier = Modifier.draggableHandle(
+                                        onDragStopped = { onCommitOrder(localOrder.map { it.id }) },
+                                    ),
                                 )
                             } else {
                                 Spacer(Modifier.size(20.dp))
                             }
                         },
                     )
-                }
+        }
+    }
+
+    // 长按菜单 Sheet
+    val target = longPressTarget
+    if (target != null) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { longPressTarget = null },
+        ) {
+            androidx.compose.foundation.layout.Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                com.nuttavern.ui.components.NutTavernSheetTitle(title = target.name.ifBlank { "操作" })
+                // 默认开启 ↔ 默认关闭
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = if (target.enabled) "设为默认关闭" else "设为默认开启",
+                    selected = false,
+                    onClick = {
+                        when (target) {
+                            is LongPressTarget.Group -> onToggleGroup(target.id, !target.enabled)
+                            is LongPressTarget.Orphan -> onToggleOrphan(target.id, target.enabled)
+                        }
+                        longPressTarget = null
+                    },
+                )
+                // 复制
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = "复制",
+                    selected = false,
+                    onClick = {
+                        when (target) {
+                            is LongPressTarget.Group -> onDuplicateGroup(target.id)
+                            is LongPressTarget.Orphan -> onDuplicateOrphan(target.id)
+                        }
+                        longPressTarget = null
+                    },
+                )
+                // 导出
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = "导出",
+                    selected = false,
+                    onClick = {
+                        android.widget.Toast.makeText(
+                            context,
+                            "功能开发中",
+                            android.widget.Toast.LENGTH_SHORT,
+                        ).show()
+                        longPressTarget = null
+                    },
+                )
+                // 删除
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = "删除",
+                    selected = false,
+                    onClick = {
+                        when (target) {
+                            is LongPressTarget.Group -> onDeleteGroup(target.id)
+                            is LongPressTarget.Orphan -> onDeleteOrphan(target.id)
+                        }
+                        longPressTarget = null
+                    },
+                )
+                Spacer(Modifier.padding(bottom = 16.dp))
             }
         }
     }
 }
-
-/**
- * 组行。视觉走 [com.nuttavern.ui.components.NutTavernEntityCard]。
- *
- * - 整张卡**不**响应点击
- * - trailing:整组启用 Switch → 进入按钮(FolderOpen) → 拖把手
- */
-@Composable
-private fun RegexGroupCard(
-    name: String,
-    scriptCount: Int,
-    enabled: Boolean,
-    elevated: Boolean,
-    onEnter: () -> Unit,
-    onToggleEnabled: (Boolean) -> Unit,
-    dragHandle: @Composable () -> Unit,
-) {
-    com.nuttavern.ui.components.NutTavernEntityCard(
-        title = name,
-        titleFallback = "未命名规则组",
-        subtitle = if (scriptCount == 0) "暂无规则" else "共 $scriptCount 条规则",
-        elevated = elevated,
-        onClick = null,
-        trailing = {
-            com.nuttavern.ui.components.NutTavernEntitySwitch(
-                checked = enabled,
-                onCheckedChange = onToggleEnabled,
+        item(key = "hint") {
+            Text(
+                text = "长按卡片进行更多操作",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
-            com.nuttavern.ui.components.NutTavernEntityEnterIconButton(
-                onClick = onEnter,
-                contentDescription = "进入规则组",
-            )
-            dragHandle()
-        },
-    )
+        }
+    }
 }
 
-/**
- * 规则行(散规则或组内规则)。视觉走 [com.nuttavern.ui.components.NutTavernEntityCard]。
- *
- * - 整张卡**不**响应点击
- * - trailing:启用 Switch(可选,组内规则不显示)→ 铅笔(编辑) → 拖把手
- *
- * 组内使用时 [showSwitch] = false:组本身是启用单位,组内规则没有独立开关。
- */
-@Composable
-internal fun RegexScriptCard(
-    name: String,
-    subtitle: String?,
-    enabled: Boolean,
-    showSwitch: Boolean,
-    elevated: Boolean,
-    onEdit: () -> Unit,
-    onToggleEnabled: (Boolean) -> Unit,
-    dragHandle: @Composable () -> Unit,
-) {
-    com.nuttavern.ui.components.NutTavernEntityCard(
-        title = name,
-        titleFallback = "未命名规则",
-        subtitle = subtitle,
-        elevated = elevated,
-        onClick = null,
-        trailing = {
-            if (showSwitch) {
-                com.nuttavern.ui.components.NutTavernEntitySwitch(
-                    checked = enabled,
-                    onCheckedChange = onToggleEnabled,
-                )
-            }
-            com.nuttavern.ui.components.NutTavernEntityEditIconButton(
-                onClick = onEdit,
-                contentDescription = "编辑规则",
-            )
-            dragHandle()
-        },
-    )
+private sealed class LongPressTarget(val id: String, val name: String, val enabled: Boolean) {
+    class Group(id: String, name: String, enabled: Boolean) : LongPressTarget(id, name, enabled)
+    class Orphan(id: String, name: String, enabled: Boolean) : LongPressTarget(id, name, enabled)
 }
 
 /**

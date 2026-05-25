@@ -134,9 +134,9 @@ fun UserPersonaListScreen(
                 onEdit = onOpenPersonaDetail,
                 onCommitOrder = viewModel::reorderRealPersonas,
                 modifier = Modifier.fillMaxSize(),
-            )
+                )
+            }
         }
-    }
 
     val target = pendingDefault
     if (target != null) {
@@ -200,6 +200,7 @@ private fun UserPersonaSearchBar(value: String, onValueChange: (String) -> Unit)
     }
 }
 
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 private fun UserPersonaListBody(
     items: List<UserPersonaViewModel.PersonaListItem>,
@@ -211,6 +212,10 @@ private fun UserPersonaListBody(
     onCommitOrder: (List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var longPressPersonaId by remember { mutableStateOf<String?>(null) }
+    var longPressPersonaName by remember { mutableStateOf("") }
+    var longPressIsDefault by remember { mutableStateOf(false) }
     // 列表里 "无" 伪卡固定第 0 位,不参与拖动;只对真实身份做 reorder。
     // 把伪卡 / 真实拆成两段,分别处理。
     val noneItem = items.firstOrNull { it.persona.isNonePersona }
@@ -254,9 +259,6 @@ private fun UserPersonaListBody(
                     persona = noneItem.persona,
                     isDefault = noneItem.isDefault,
                     onClick = { onCardClick(noneItem.persona, noneItem.isDefault) },
-                    // 伪卡不可编辑、不可拖,但挂与真实卡片等尺寸的透明占位保证 Row 子元素数
-                    // 及行高严格一致(避免右侧空无一物时 Row spacedBy 导致高度漂移)。
-                    editButton = { Spacer(Modifier.size(32.dp)) },
                     dragHandle = { Spacer(Modifier.size(20.dp)) },
                 )
             }
@@ -272,8 +274,12 @@ private fun UserPersonaListBody(
                     persona = item.persona,
                     isDefault = item.isDefault,
                     elevated = isDragging,
-                    onClick = { onCardClick(item.persona, item.isDefault) },
-                    editButton = { UserPersonaEditIconButton(onClick = { onEdit(item.persona.id) }) },
+                    onClick = { onEdit(item.persona.id) },
+                    onLongClick = {
+                        longPressPersonaId = item.persona.id
+                        longPressPersonaName = item.persona.name
+                        longPressIsDefault = item.isDefault
+                    },
                     dragHandle = {
                         if (reorderable) {
                             UserPersonaDragHandle(

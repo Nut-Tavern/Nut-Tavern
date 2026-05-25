@@ -1,5 +1,7 @@
 package com.nuttavern.ui.character
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,24 +39,26 @@ import com.nuttavern.data.character.Character
  * - 用 [isCurrent] 控制是否显示 "使用中" 胶囊;
  * - 用 [editButton] / [dragHandle] 提供具体的尾部 Composable;不传则不渲染对应槽位。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun CharacterCard(
     character: Character,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     elevated: Boolean = false,
     isCurrent: Boolean = false,
-    editButton: (@Composable () -> Unit)? = null,
     dragHandle: (@Composable () -> Unit)? = null,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick),
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = if (elevated) 6.dp else 0.dp,
         shadowElevation = if (elevated) 6.dp else 0.dp,
-        onClick = onClick,
     ) {
         Row(
             modifier = Modifier
@@ -96,7 +100,6 @@ internal fun CharacterCard(
                     )
                 }
             }
-            editButton?.invoke()
             dragHandle?.invoke()
         }
     }

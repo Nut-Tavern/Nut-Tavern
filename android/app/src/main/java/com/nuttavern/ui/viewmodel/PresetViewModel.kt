@@ -89,6 +89,10 @@ class PresetViewModel @Inject constructor(
         viewModelScope.launch { repository.delete(id) }
     }
 
+    fun duplicate(id: String) {
+        viewModelScope.launch { repository.duplicate(id) }
+    }
+
     fun setDefault(id: String) {
         viewModelScope.launch { repository.setDefault(id) }
     }

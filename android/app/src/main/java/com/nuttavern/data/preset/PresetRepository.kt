@@ -24,6 +24,7 @@ interface PresetRepository {
 
     suspend fun upsert(preset: Preset)
     suspend fun delete(id: String)
+    suspend fun duplicate(id: String)
     suspend fun setDefault(id: String)
     suspend fun reorder(orderedIds: List<String>)
 }

@@ -82,6 +82,7 @@ fun SettingsScreen(
     onOpenPersonas: () -> Unit,
     onOpenPresets: () -> Unit,
     onOpenRegex: () -> Unit,
+    onOpenLorebooks: () -> Unit,
     onOpenTools: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
@@ -189,7 +190,7 @@ fun SettingsScreen(
                         title = "世界书",
                         subtitle = "管理世界书",
                         showTrailingChevron = true,
-                        onClick = { pendingFeatureNotice = "世界书" },
+                        onClick = onOpenLorebooks,
                     )
                     NutTavernGroupDivider()
                     NutTavernIconRow(

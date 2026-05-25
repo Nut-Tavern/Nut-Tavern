@@ -168,7 +168,14 @@ class PromptComposer @Inject constructor(
                         }
                         ID_WORLD_INFO_BEFORE,
                         ID_WORLD_INFO_AFTER -> {
-                            // 世界书 marker 占位,Lorebook 模块上线后填回。
+                            val lr = input.lorebookResult
+                            if (lr != null) {
+                                val text = when (entry.identifier) {
+                                    ID_WORLD_INFO_BEFORE -> lr.worldInfoBefore
+                                    else -> lr.worldInfoAfter
+                                }
+                                if (text.isNotBlank()) systemBuilder.appendBlock(text)
+                            }
                         }
                         // 未识别 marker 留给扩展模块,跳过。
                     }
@@ -238,9 +245,23 @@ class PromptComposer @Inject constructor(
             }
         }
 
-        // D. ABSOLUTE 注入(预设条目 + persona AT_DEPTH 共用清单)。
+        // D. ABSOLUTE 注入(预设条目 + persona AT_DEPTH + 世界书 atDepth 共用清单)。
         runNode("persona.atDepth", diagnostics) {
             personaAbsoluteInjection(persona)?.let { absoluteInjections += it }
+        }
+        // 世界书 atDepth 条目注入
+        input.lorebookResult?.depthEntries?.forEach { depthEntry ->
+            val role = when (depthEntry.role) {
+                com.nuttavern.data.lorebook.WiRole.USER -> PromptRole.USER
+                com.nuttavern.data.lorebook.WiRole.ASSISTANT -> PromptRole.ASSISTANT
+                else -> PromptRole.SYSTEM
+            }
+            absoluteInjections += AbsoluteInjection(
+                depth = depthEntry.depth,
+                order = 0,
+                role = role,
+                content = depthEntry.content,
+            )
         }
         applyAbsoluteInjections(absoluteInjections, composedMessages)
 
@@ -605,6 +626,7 @@ data class PromptComposerInput(
     val globalRegexScripts: List<RegexScript> = emptyList(),
     val characterAllowedRegex: Boolean = true,
     val presetAllowedRegex: Boolean = true,
+    val lorebookResult: com.nuttavern.lorebook.LorebookEngine.ActivationResult? = null,
 )
 
 /**

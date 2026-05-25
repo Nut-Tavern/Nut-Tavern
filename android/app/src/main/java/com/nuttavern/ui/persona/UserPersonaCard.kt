@@ -1,5 +1,7 @@
 package com.nuttavern.ui.persona
 
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -40,26 +42,29 @@ import com.nuttavern.data.persona.UserPersona
  * - 用 [editButton] / [dragHandle] 提供具体的尾部 Composable;
  * - 用 [enabled] = false 时主区域不响应点击(用于伪卡 "无" 已是默认 / 已使用中的场景)。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun UserPersonaCard(
     persona: UserPersona,
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
     elevated: Boolean = false,
     isDefault: Boolean = false,
     isCurrent: Boolean = false,
-    editButton: (@Composable () -> Unit)? = null,
     dragHandle: (@Composable () -> Unit)? = null,
 ) {
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .let { m -> if (onLongClick != null) m.combinedClickable(onClick = onClick, onLongClick = onLongClick) else m },
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = if (elevated) 6.dp else 0.dp,
         shadowElevation = if (elevated) 6.dp else 0.dp,
-        onClick = onClick,
+        onClick = if (onLongClick == null) onClick else { {} },
         enabled = enabled,
     ) {
         Row(
@@ -101,7 +106,6 @@ internal fun UserPersonaCard(
                     content = MaterialTheme.colorScheme.onTertiaryContainer,
                 )
             }
-            editButton?.invoke()
             dragHandle?.invoke()
         }
     }

@@ -66,6 +66,9 @@ private object Routes {
     const val RegexDetail = "settings/regex/{regexId}"
     const val RegexGroupScriptDetail = "settings/regex/group/{groupId}/script/{scriptId}"
     const val Tools = "settings/tools"
+    const val Lorebooks = "settings/lorebooks"
+    const val LorebookDetail = "settings/lorebooks/{lorebookId}"
+    const val LorebookEntryDetail = "settings/lorebooks/{lorebookId}/entry/{entryUid}"
 
     fun providerDetail(providerId: String): String = "settings/providers/$providerId"
     fun characterDetail(characterId: String): String = "settings/characters/$characterId"
@@ -75,6 +78,9 @@ private object Routes {
     fun regexDetail(regexId: String): String = "settings/regex/$regexId"
     fun regexGroupScriptDetail(groupId: String, scriptId: String): String =
         "settings/regex/group/$groupId/script/$scriptId"
+    fun lorebookDetail(lorebookId: String): String = "settings/lorebooks/$lorebookId"
+    fun lorebookEntryDetail(lorebookId: String, entryUid: Int): String =
+        "settings/lorebooks/$lorebookId/entry/$entryUid"
 }
 
 /** 设置 / 二级页右滑入 / 右滑出的动画时长。M3 标准 emphasized 段 250-300ms,这里取 260。 */
@@ -133,6 +139,7 @@ private fun NutTavernNavGraph() {
                 onOpenPersonas = { navController.navigate(Routes.Personas) },
                 onOpenPresets = { navController.navigate(Routes.Presets) },
                 onOpenRegex = { navController.navigate(Routes.Regex) },
+                onOpenLorebooks = { navController.navigate(Routes.Lorebooks) },
                 onOpenTools = { navController.navigate(Routes.Tools) },
             )
         }
@@ -344,6 +351,88 @@ private fun NutTavernNavGraph() {
             val id = backStackEntry.arguments?.getString("presetId").orEmpty()
             PresetEditScreen(
                 presetId = id,
+                onBack = { navController.popBackStack() },
+            )
+        }
+        composable(
+            Routes.Lorebooks,
+            enterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    initialOffsetX = { it },
+                )
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    targetOffsetX = { it },
+                )
+            },
+        ) {
+            com.nuttavern.ui.lorebook.LorebookListScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLorebook = { lorebookId ->
+                    navController.navigate(Routes.lorebookDetail(lorebookId))
+                },
+            )
+        }
+        composable(
+            Routes.LorebookDetail,
+            arguments = listOf(
+                androidx.navigation.navArgument("lorebookId") {
+                    type = androidx.navigation.NavType.StringType
+                },
+            ),
+            enterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    initialOffsetX = { it },
+                )
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    targetOffsetX = { it },
+                )
+            },
+        ) { backStackEntry ->
+            val lorebookId = backStackEntry.arguments?.getString("lorebookId").orEmpty()
+            com.nuttavern.ui.lorebook.LorebookDetailScreen(
+                lorebookId = lorebookId,
+                onBack = { navController.popBackStack() },
+                onEditEntry = { bookId, entryUid ->
+                    navController.navigate(Routes.lorebookEntryDetail(bookId, entryUid))
+                },
+            )
+        }
+        composable(
+            Routes.LorebookEntryDetail,
+            arguments = listOf(
+                androidx.navigation.navArgument("lorebookId") {
+                    type = androidx.navigation.NavType.StringType
+                },
+                androidx.navigation.navArgument("entryUid") {
+                    type = androidx.navigation.NavType.IntType
+                },
+            ),
+            enterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    initialOffsetX = { it },
+                )
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    targetOffsetX = { it },
+                )
+            },
+        ) { backStackEntry ->
+            val lorebookId = backStackEntry.arguments?.getString("lorebookId").orEmpty()
+            val entryUid = backStackEntry.arguments?.getInt("entryUid") ?: 0
+            com.nuttavern.ui.lorebook.LorebookEntryEditScreen(
+                lorebookId = lorebookId,
+                entryUid = entryUid,
                 onBack = { navController.popBackStack() },
             )
         }

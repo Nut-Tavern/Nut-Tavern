@@ -85,6 +85,19 @@ class DataStorePresetRepository @Inject constructor(
         conversationRepository.clearPresetIdFromAllConversations(id)
     }
 
+    override suspend fun duplicate(id: String) {
+        dataStore.mutate { snapshot ->
+            val original = snapshot.presets.find { it.id == id } ?: return@mutate snapshot
+            val newId = java.util.UUID.randomUUID().toString()
+            val duplicated = original.copy(id = newId, name = "${original.name}*")
+            val insertIndex = snapshot.orderedIds.indexOf(id)
+            val newOrder = snapshot.orderedIds.toMutableList().apply {
+                add(if (insertIndex >= 0) insertIndex + 1 else size, newId)
+            }
+            snapshot.copy(presets = snapshot.presets + duplicated, orderedIds = newOrder)
+        }
+    }
+
     override suspend fun setDefault(id: String) {
         dataStore.mutate { snapshot ->
             val seeded = ensureDefaultPresentMutating(snapshot)

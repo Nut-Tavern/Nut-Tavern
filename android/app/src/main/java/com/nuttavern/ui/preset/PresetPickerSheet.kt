@@ -76,9 +76,7 @@ fun PresetPickerSheet(
                             onSelectPreset(item.preset.id)
                             onDismiss()
                         },
-                        editButton = {
-                            PresetEditIconButton(onClick = { onOpenPresetDetail(item.preset.id) })
-                        },
+                        onLongClick = {},
                     )
                 }
             }

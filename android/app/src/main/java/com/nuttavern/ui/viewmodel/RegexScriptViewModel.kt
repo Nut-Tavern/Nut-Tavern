@@ -116,6 +116,14 @@ class RegexScriptViewModel @Inject constructor(
         viewModelScope.launch { repository.deleteOrphan(scriptId) }
     }
 
+    fun duplicateGroup(groupId: String) {
+        viewModelScope.launch { repository.duplicateGroup(groupId) }
+    }
+
+    fun duplicateOrphan(scriptId: String) {
+        viewModelScope.launch { repository.duplicateOrphan(scriptId) }
+    }
+
     fun toggleOrphanEnabled(scriptId: String, disabled: Boolean) {
         viewModelScope.launch { repository.toggleOrphanEnabled(scriptId, disabled) }
     }

@@ -79,14 +79,6 @@ fun PersonaPickerSheet(
                             onSelectPersona(item.persona.id)
                             onDismiss()
                         },
-                        editButton = {
-                            // "无"伪卡不允许编辑。
-                            if (!item.persona.isNonePersona) {
-                                UserPersonaEditIconButton(
-                                    onClick = { onOpenPersonaDetail(item.persona.id) },
-                                )
-                            }
-                        },
                     )
                 }
             }

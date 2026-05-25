@@ -1,6 +1,8 @@
 package com.nuttavern.ui.components
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -268,6 +270,7 @@ object NutTavernCapabilityChipColors {
  * 之所以不加 trailing 行高对齐机制:M3 Switch 自然高度比 IconButton 高 ~4dp,
  * 这是 Switch 触摸目标合规带来的固定差,强行 scale 会破坏点击区。视觉上 ~4dp 差不影响列表整体观感。
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun NutTavernEntityCard(
     title: String,
@@ -276,11 +279,10 @@ fun NutTavernEntityCard(
     titleFallback: String = "未命名",
     elevated: Boolean = false,
     onClick: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     leading: @Composable (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
-    // onClick 为 null 时走非交互版本,Surface 不挂 onClick,整卡不响应点击。
-    // 这避免了"传空 lambda + enabled = false"导致的 disabled 灰态视觉退化。
     val content: @Composable () -> Unit = {
         Row(
             modifier = Modifier
@@ -318,26 +320,30 @@ fun NutTavernEntityCard(
             }
         }
     }
-    if (onClick != null) {
-        Surface(
-            modifier = modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = if (elevated) 6.dp else 0.dp,
-            shadowElevation = if (elevated) 6.dp else 0.dp,
-            onClick = onClick,
-        ) { content() }
-    } else {
-        Surface(
-            modifier = modifier.fillMaxWidth(),
-            shape = MaterialTheme.shapes.large,
-            color = MaterialTheme.colorScheme.surfaceContainerHigh,
-            contentColor = MaterialTheme.colorScheme.onSurface,
-            tonalElevation = if (elevated) 6.dp else 0.dp,
-            shadowElevation = if (elevated) 6.dp else 0.dp,
-        ) { content() }
-    }
+
+    val surfaceModifier = modifier
+        .fillMaxWidth()
+        .let { mod ->
+            if (onClick != null || onLongClick != null) {
+                mod.then(
+                    Modifier.combinedClickable(
+                        onClick = onClick ?: {},
+                        onLongClick = onLongClick,
+                    )
+                )
+            } else {
+                mod
+            }
+        }
+
+    Surface(
+        modifier = surfaceModifier,
+        shape = MaterialTheme.shapes.large,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        tonalElevation = if (elevated) 6.dp else 0.dp,
+        shadowElevation = if (elevated) 6.dp else 0.dp,
+    ) { content() }
 }
 
 /**

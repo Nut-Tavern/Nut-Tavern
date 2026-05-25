@@ -1,12 +1,12 @@
-package com.nuttavern.ui.character
+package com.nuttavern.ui.lorebook
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -16,11 +16,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -35,66 +38,89 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
-import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
-import com.nuttavern.data.character.Character
+import com.nuttavern.data.lorebook.Lorebook
+import com.nuttavern.ui.components.NutTavernEntityCard
+import com.nuttavern.ui.components.NutTavernEntityDragHandle
+import com.nuttavern.ui.components.NutTavernSelectableRow
 import com.nuttavern.ui.components.NutTavernShapeTokens
-import com.nuttavern.ui.viewmodel.CharacterViewModel
+import com.nuttavern.ui.components.NutTavernSheetTitle
+import com.nuttavern.ui.viewmodel.LorebookViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
-internal const val NEW_CHARACTER_PLACEHOLDER_ID = "__new__"
-
 /**
- * 角色列表页。
+ * 世界书列表页(一级页)。
  *
- * 视觉规则:
- * - 单列长卡片,与 [CharacterCard] 同规格(32dp 头像 + 标题 + 副标题 + 32dp 编辑键 + 拖把手)。
- * - 搜索框胶囊形,与 ProviderListScreen 一致。
- *
- * 拖动排序:
- * - 卡片右侧 [Lucide.GripVertical] 把手长按拖动,松手提交到仓库。
- * - 不允许在搜索过滤态拖动:过滤后看到的不是真实顺序,拖动会让人困惑(对齐 Provider 列表)。
- *
- * 删除入口走编辑页底部"删除角色"卡(与 UserPersona 一致),列表卡只点击进编辑。
+ * - "+" 下拉菜单:新建 / 导入
+ * - 点击卡片进入二级页
+ * - 长按弹菜单(复制/导出/删除)
+ * - 无 Switch
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CharacterListScreen(
+fun LorebookListScreen(
     onBack: () -> Unit,
-    onOpenCharacterDetail: (characterId: String) -> Unit,
-    viewModel: CharacterViewModel = hiltViewModel(),
+    onOpenLorebook: (lorebookId: String) -> Unit,
+    viewModel: LorebookViewModel = hiltViewModel(),
 ) {
-    val characters by viewModel.characters.collectAsState()
+    val context = LocalContext.current
+    val lorebooks by viewModel.lorebooks.collectAsState()
     var query by remember { mutableStateOf("") }
+    var showAddMenu by remember { mutableStateOf(false) }
+    var longPressId by remember { mutableStateOf<String?>(null) }
+    var longPressName by remember { mutableStateOf("") }
 
     val isFiltering = query.isNotBlank()
-    val filteredCharacters = remember(characters, query) {
-        if (query.isBlank()) characters
-        else characters.filter { character ->
-            character.name.contains(query, ignoreCase = true) ||
-                character.description.contains(query, ignoreCase = true) ||
-                character.tags.any { it.contains(query, ignoreCase = true) }
-        }
+    val filteredItems = remember(lorebooks, query) {
+        if (!isFiltering) lorebooks
+        else lorebooks.filter { it.name.contains(query, ignoreCase = true) }
     }
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("角色") },
+                title = { Text("世界书") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Lucide.ArrowLeft, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onOpenCharacterDetail(NEW_CHARACTER_PLACEHOLDER_ID) }) {
-                        Icon(Lucide.Plus, contentDescription = "新增角色")
+                    Box {
+                        IconButton(onClick = { showAddMenu = true }) {
+                            Icon(Lucide.Plus, contentDescription = "新建世界书")
+                        }
+                        DropdownMenu(
+                            expanded = showAddMenu,
+                            onDismissRequest = { showAddMenu = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("新建世界书") },
+                                onClick = {
+                                    showAddMenu = false
+                                    val book = viewModel.newLorebook()
+                                    viewModel.upsert(book)
+                                    onOpenLorebook(book.id)
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("导入世界书") },
+                                onClick = {
+                                    showAddMenu = false
+                                    android.widget.Toast.makeText(
+                                        context, "导入功能暂未接入", android.widget.Toast.LENGTH_SHORT,
+                                    ).show()
+                                },
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -111,27 +137,53 @@ fun CharacterListScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            CharacterSearchBar(value = query, onValueChange = { query = it })
+            LorebookSearchBar(value = query, onValueChange = { query = it })
 
             when {
-                filteredCharacters.isEmpty() && isFiltering -> CharacterListEmpty("没有匹配的角色")
-                filteredCharacters.isEmpty() -> CharacterListEmpty("还没有角色,点右上角加号新建")
-                else -> CharacterListBody(
-                    characters = filteredCharacters,
+                filteredItems.isEmpty() && isFiltering -> LorebookListEmpty("没有找到匹配的世界书")
+                filteredItems.isEmpty() -> LorebookListEmpty("暂无世界书,点右上角新建")
+                else -> LorebookList(
+                    items = filteredItems,
                     reorderable = !isFiltering,
-                    onOpenCharacterDetail = onOpenCharacterDetail,
-                    onCommitOrder = viewModel::reorderCharacters,
+                    onItemClick = onOpenLorebook,
+                    onLongPress = { id, name -> longPressId = id; longPressName = name },
+                    onCommitOrder = { orderedIds -> viewModel.reorder(orderedIds) },
                 )
+            }
+        }
+    }
+
+    // 长按菜单
+    if (longPressId != null) {
+        ModalBottomSheet(onDismissRequest = { longPressId = null }) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                NutTavernSheetTitle(title = longPressName.ifBlank { "操作" })
+                NutTavernSelectableRow(
+                    title = "复制", selected = false,
+                    onClick = { longPressId?.let { viewModel.duplicate(it) }; longPressId = null },
+                )
+                NutTavernSelectableRow(
+                    title = "导出", selected = false,
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        longPressId = null
+                    },
+                )
+                NutTavernSelectableRow(
+                    title = "删除", selected = false,
+                    onClick = { longPressId?.let { viewModel.delete(it) }; longPressId = null },
+                )
+                Spacer(Modifier.padding(bottom = 16.dp))
             }
         }
     }
 }
 
-/**
- * 搜索栏。不使用 M3 DockedSearchBar:其交互模型(展开/收起 + 建议列表)对纯过滤场景过重。
- */
 @Composable
-private fun CharacterSearchBar(value: String, onValueChange: (String) -> Unit) {
+private fun LorebookSearchBar(value: String, onValueChange: (String) -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(percent = NutTavernShapeTokens.SearchBar),
@@ -154,7 +206,7 @@ private fun CharacterSearchBar(value: String, onValueChange: (String) -> Unit) {
             Box(modifier = Modifier.fillMaxWidth()) {
                 if (value.isEmpty()) {
                     Text(
-                        text = "搜索角色",
+                        text = "搜索世界书",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -175,28 +227,27 @@ private fun CharacterSearchBar(value: String, onValueChange: (String) -> Unit) {
     }
 }
 
-/**
- * 列表主体。
- *
- * - `localOrder` 在拖动过程中跟手实时更新,松手再调 [onCommitOrder] 把最终顺序提交到仓库,
- *   避免每帧把临时态打回 StateFlow → recompose 整列(对齐 ProviderListScreen)。
- * - 上游 [characters] 因为别处增 / 删 / 编辑变化时,通过 [LaunchedEffect] 同步重置 localOrder。
- */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-private fun CharacterListBody(
-    characters: List<Character>,
+private fun LorebookList(
+    items: List<Lorebook>,
     reorderable: Boolean,
-    onOpenCharacterDetail: (String) -> Unit,
+    onItemClick: (String) -> Unit,
+    onLongPress: (id: String, name: String) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var longPressCharacterId by remember { mutableStateOf<String?>(null) }
-    var longPressCharacterName by remember { mutableStateOf("") }
-    val lazyListState = rememberLazyListState()
-    var localOrder by remember { mutableStateOf(characters) }
-    LaunchedEffect(characters) { localOrder = characters }
+    var localOrder by remember { mutableStateOf(items) }
+    LaunchedEffect(items) {
+        val localIds = localOrder.map { it.id }.toSet()
+        val upstreamIds = items.map { it.id }.toSet()
+        localOrder = if (localIds == upstreamIds) {
+            val byId = items.associateBy { it.id }
+            localOrder.mapNotNull { byId[it.id] }
+        } else {
+            items
+        }
+    }
 
+    val lazyListState = rememberLazyListState()
     val reorderState = rememberReorderableLazyListState(lazyListState) { from, to ->
         localOrder = localOrder.toMutableList().apply { add(to.index, removeAt(from.index)) }
     }
@@ -207,22 +258,25 @@ private fun CharacterListBody(
         contentPadding = PaddingValues(top = 4.dp, bottom = 24.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(localOrder, key = { it.id }) { character ->
-            ReorderableItem(state = reorderState, key = character.id) { isDragging ->
-                CharacterCard(
-                    character = character,
+        items(localOrder, key = { it.id }) { lorebook ->
+            ReorderableItem(state = reorderState, key = lorebook.id) { isDragging ->
+                NutTavernEntityCard(
+                    title = lorebook.name,
+                    titleFallback = "未命名世界书",
+                    subtitle = if (lorebook.entries.isEmpty()) "暂无条目"
+                    else "共 ${lorebook.entries.size} 条",
                     elevated = isDragging,
-                    onClick = { onOpenCharacterDetail(character.id) },
-                    onLongClick = { longPressCharacterId = character.id; longPressCharacterName = character.name },
-                    dragHandle = {
+                    onClick = { onItemClick(lorebook.id) },
+                    onLongClick = { onLongPress(lorebook.id, lorebook.name) },
+                    trailing = {
                         if (reorderable) {
-                            CharacterDragHandle(
+                            NutTavernEntityDragHandle(
                                 modifier = Modifier.draggableHandle(
-                                    onDragStopped = {
-                                        onCommitOrder(localOrder.map { it.id })
-                                    },
+                                    onDragStopped = { onCommitOrder(localOrder.map { it.id }) },
                                 ),
                             )
+                        } else {
+                            Spacer(Modifier.size(20.dp))
                         }
                     },
                 )
@@ -234,63 +288,14 @@ private fun CharacterListBody(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                textAlign = TextAlign.Center,
             )
         }
     }
-
-    // 长按菜单
-    if (longPressCharacterId != null) {
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = { longPressCharacterId = null },
-        ) {
-            androidx.compose.foundation.layout.Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                com.nuttavern.ui.components.NutTavernSheetTitle(title = longPressCharacterName.ifBlank { "操作" })
-                com.nuttavern.ui.components.NutTavernSelectableRow(
-                    title = "复制", selected = false,
-                    onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
-                        longPressCharacterId = null
-                    },
-                )
-                com.nuttavern.ui.components.NutTavernSelectableRow(
-                    title = "导出", selected = false,
-                    onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
-                        longPressCharacterId = null
-                    },
-                )
-                com.nuttavern.ui.components.NutTavernSelectableRow(
-                    title = "删除", selected = false,
-                    onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
-                        longPressCharacterId = null
-                    },
-                )
-                Spacer(Modifier.padding(bottom = 16.dp))
-            }
-        }
-    }
-}
-
-/**
- * 拖把手图标。规则与 [com.nuttavern.ui.persona.UserPersonaDragHandle] 一致。
- */
-@Composable
-private fun CharacterDragHandle(modifier: Modifier = Modifier) {
-    Icon(
-        imageVector = Lucide.GripVertical,
-        contentDescription = "拖动排序",
-        modifier = modifier.size(20.dp),
-        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-    )
 }
 
 @Composable
-private fun CharacterListEmpty(text: String) {
+private fun LorebookListEmpty(text: String) {
     Box(
         modifier = Modifier
             .fillMaxWidth()

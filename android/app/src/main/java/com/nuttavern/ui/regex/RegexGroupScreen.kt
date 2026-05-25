@@ -355,27 +355,20 @@ private fun GroupScriptList(
     ) {
         items(localOrder, key = { it.id }) { script ->
             ReorderableItem(state = reorderState, key = script.id) { isDragging ->
-                // 复用顶层散规则卡片,关闭 Switch:组内规则没有独立启用开关,组本身是启用单位。
-                RegexScriptCard(
-                    name = script.scriptName,
+                com.nuttavern.ui.components.NutTavernEntityCard(
+                    title = script.scriptName,
+                    titleFallback = "未命名规则",
                     subtitle = regexScriptSubtitle(script),
-                    enabled = true,
-                    showSwitch = false,
                     elevated = isDragging,
-                    onEdit = { onScriptClick(script.id) },
-                    onToggleEnabled = {},
-                    dragHandle = {
-                        Icon(
-                            imageVector = Lucide.GripVertical,
-                            contentDescription = "拖动排序",
+                    onClick = { onScriptClick(script.id) },
+                    trailing = {
+                        com.nuttavern.ui.components.NutTavernEntityDragHandle(
                             modifier = Modifier
-                                .size(20.dp)
                                 .draggableHandle(
                                     onDragStopped = {
                                         onCommitOrder(localOrder.map { it.id })
                                     },
                                 ),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     },
                 )

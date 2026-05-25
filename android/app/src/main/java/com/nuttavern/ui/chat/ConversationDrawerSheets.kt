@@ -144,11 +144,6 @@ internal fun CharacterPickerSheet(
                             character = character,
                             isCurrent = character.id == currentCharacterId,
                             onClick = { onSelectCharacter(character.id) },
-                            editButton = {
-                                CharacterEditIconButton(
-                                    onClick = { onOpenCharacterDetail(character.id) },
-                                )
-                            },
                         )
                     }
                 }

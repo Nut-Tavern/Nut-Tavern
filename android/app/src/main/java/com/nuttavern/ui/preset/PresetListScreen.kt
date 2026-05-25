@@ -70,7 +70,10 @@ fun PresetListScreen(
 ) {
     val items by viewModel.items.collectAsState()
     var pendingDefault by remember { mutableStateOf<Preset?>(null) }
+    var longPressPreset by remember { mutableStateOf<Preset?>(null) }
+    var longPressIsDefault by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     val isFiltering = query.isNotBlank()
     val filteredItems = remember(items, query) {
@@ -119,10 +122,11 @@ fun PresetListScreen(
                 else -> PresetListBody(
                     items = filteredItems,
                     reorderable = !isFiltering,
-                    onCardClick = { preset, isDefault ->
-                        if (!isDefault) pendingDefault = preset
-                    },
                     onEdit = onOpenPresetDetail,
+                    onLongPress = { preset, isDefault ->
+                        longPressPreset = preset
+                        longPressIsDefault = isDefault
+                    },
                     onCommitOrder = viewModel::reorderPresets,
                 )
             }
@@ -139,6 +143,51 @@ fun PresetListScreen(
             },
             onDismiss = { pendingDefault = null },
         )
+    }
+
+    // 长按菜单
+    if (longPressPreset != null) {
+        val lp = longPressPreset!!
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { longPressPreset = null },
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                com.nuttavern.ui.components.NutTavernSheetTitle(title = lp.name.ifBlank { "操作" })
+                if (!longPressIsDefault) {
+                    com.nuttavern.ui.components.NutTavernSelectableRow(
+                        title = "设为默认", selected = false,
+                        onClick = { pendingDefault = lp; longPressPreset = null },
+                    )
+                }
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = "复制", selected = false,
+                    onClick = {
+                        viewModel.duplicate(lp.id)
+                        longPressPreset = null
+                    },
+                )
+                com.nuttavern.ui.components.NutTavernSelectableRow(
+                    title = "导出", selected = false,
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        longPressPreset = null
+                    },
+                )
+                if (!lp.isBuiltInDefault) {
+                    com.nuttavern.ui.components.NutTavernSelectableRow(
+                        title = "删除", selected = false,
+                        onClick = {
+                            viewModel.delete(lp.id)
+                            longPressPreset = null
+                        },
+                    )
+                }
+                Spacer(Modifier.padding(bottom = 16.dp))
+            }
+        }
     }
 }
 
@@ -191,8 +240,8 @@ private fun PresetSearchBar(value: String, onValueChange: (String) -> Unit) {
 private fun PresetListBody(
     items: List<PresetViewModel.PresetListItem>,
     reorderable: Boolean,
-    onCardClick: (Preset, isDefault: Boolean) -> Unit,
     onEdit: (String) -> Unit,
+    onLongPress: (Preset, isDefault: Boolean) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
 ) {
     var localOrder by remember { mutableStateOf(items) }
@@ -224,8 +273,8 @@ private fun PresetListBody(
                     preset = item.preset,
                     isDefault = item.isDefault,
                     elevated = isDragging,
-                    onClick = { onCardClick(item.preset, item.isDefault) },
-                    editButton = { PresetEditIconButton(onClick = { onEdit(item.preset.id) }) },
+                    onClick = { onEdit(item.preset.id) },
+                    onLongClick = { onLongPress(item.preset, item.isDefault) },
                     dragHandle = {
                         if (reorderable) {
                             PresetDragHandle(

@@ -60,6 +60,8 @@ class ChatViewModel @Inject constructor(
     private val personaRepository: PersonaRepository,
     private val presetRepository: PresetRepository,
     private val regexScriptRepository: RegexScriptRepository,
+    private val lorebookRepository: com.nuttavern.data.lorebook.LorebookRepository,
+    private val lorebookEngine: com.nuttavern.lorebook.LorebookEngine,
     private val settingsDataStore: SettingsDataStore,
     private val promptComposer: PromptComposer,
     private val regexEngine: RegexEngine,
@@ -1365,6 +1367,9 @@ class ChatViewModel @Inject constructor(
         )
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
+        // 世界书激活:合并全局选中 + 角色内嵌世界书
+        val lorebookResult = runLorebookActivation(history, character, preset)
+
         return PromptComposerInput(
             userMessage = userMessage,
             history = history,
@@ -1374,6 +1379,71 @@ class ChatViewModel @Inject constructor(
             globalRegexScripts = globalRegexScripts,
             characterAllowedRegex = characterAllowed,
             presetAllowedRegex = presetAllowed,
+            lorebookResult = lorebookResult,
+        )
+    }
+
+    /**
+     * 执行世界书激活扫描。合并全局选中的世界书 + 角色内嵌世界书。
+     */
+    private suspend fun runLorebookActivation(
+        history: List<HistoryMessage>,
+        character: com.nuttavern.data.character.Character?,
+        preset: com.nuttavern.data.preset.Preset,
+    ): com.nuttavern.lorebook.LorebookEngine.ActivationResult? {
+        val globalSelectedIds = lorebookRepository.globalSelectedIds.first()
+        val allBooks = lorebookRepository.lorebooks.first()
+        val selectedBooks = allBooks.filter { it.id in globalSelectedIds }
+
+        // 角色内嵌世界书转换为 Lorebook 格式
+        val characterBook = character?.characterBook?.let { cb ->
+            com.nuttavern.data.lorebook.Lorebook(
+                id = "__character_book__",
+                name = cb.name ?: "角色内嵌世界书",
+                scanDepth = cb.scanDepth ?: 2,
+                tokenBudget = cb.tokenBudget ?: 25,
+                recursiveScanning = cb.recursiveScanning ?: false,
+                entries = cb.entries.mapIndexed { index, entry ->
+                    com.nuttavern.data.lorebook.LorebookEntry(
+                        uid = entry.id ?: index,
+                        key = entry.keys,
+                        keysecondary = entry.secondaryKeys,
+                        comment = entry.comment ?: entry.name ?: "",
+                        content = entry.content,
+                        constant = entry.isConstant ?: false,
+                        selective = entry.selective ?: true,
+                        selectiveLogic = entry.selectiveLogic ?: com.nuttavern.data.lorebook.SelectiveLogic.AND_ANY,
+                        order = entry.insertionOrder,
+                        position = entry.position?.toIntOrNull() ?: com.nuttavern.data.lorebook.WiPosition.BEFORE,
+                        disable = !entry.enabled,
+                        depth = entry.depth ?: com.nuttavern.data.lorebook.LorebookEntry.DEFAULT_DEPTH,
+                        role = entry.role?.toIntOrNull() ?: com.nuttavern.data.lorebook.WiRole.SYSTEM,
+                        group = entry.group ?: "",
+                        groupOverride = entry.groupOverride ?: false,
+                        groupWeight = entry.groupWeight ?: com.nuttavern.data.lorebook.LorebookEntry.DEFAULT_WEIGHT,
+                        entryScanDepth = entry.entryScanDepth,
+                        entryCaseSensitive = entry.entryCaseSensitive,
+                        entryMatchWholeWords = entry.matchWholeWords,
+                        probability = entry.probability ?: 100,
+                        useProbability = entry.useProbability ?: true,
+                        excludeRecursion = entry.excludeRecursion ?: false,
+                        preventRecursion = entry.preventRecursion ?: false,
+                    )
+                },
+            )
+        }
+
+        val lorebooks = buildList {
+            if (characterBook != null) add(characterBook)
+            addAll(selectedBooks)
+        }
+        if (lorebooks.isEmpty()) return null
+
+        val messages = history.map { it.content }.reversed() // LorebookEngine 期望 index 0 = 最新
+        return lorebookEngine.activate(
+            messages = messages,
+            lorebooks = lorebooks,
+            wiFormat = preset.wiFormat,
         )
     }
 

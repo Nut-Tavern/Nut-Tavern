@@ -82,6 +82,23 @@ class RegexScriptRepository @Inject constructor(
         conversationRepository.removeRegexGroupIdFromAllConversations(groupId)
     }
 
+    suspend fun duplicateGroup(groupId: String) {
+        dataStore.mutate { s ->
+            val original = s.groups.find { it.id == groupId } ?: return@mutate s
+            val newId = java.util.UUID.randomUUID().toString()
+            val duplicated = original.copy(
+                id = newId,
+                name = "${original.name}*",
+                scripts = original.scripts.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+            )
+            val insertIndex = s.topLevelOrder.indexOf(groupId)
+            val newOrder = s.topLevelOrder.toMutableList().apply {
+                add(if (insertIndex >= 0) insertIndex + 1 else size, newId)
+            }
+            s.copy(groups = s.groups + duplicated, topLevelOrder = newOrder)
+        }
+    }
+
     suspend fun toggleGroupEnabled(groupId: String, enabled: Boolean) {
         dataStore.mutate { s ->
             s.copy(
@@ -174,6 +191,19 @@ class RegexScriptRepository @Inject constructor(
         }
         // 联动清理:所有会话快照里的引用 id 同步移除。
         conversationRepository.removeOrphanRegexIdFromAllConversations(scriptId)
+    }
+
+    suspend fun duplicateOrphan(scriptId: String) {
+        dataStore.mutate { s ->
+            val original = s.orphanScripts.find { it.id == scriptId } ?: return@mutate s
+            val newId = java.util.UUID.randomUUID().toString()
+            val duplicated = original.copy(id = newId, scriptName = "${original.scriptName}*")
+            val insertIndex = s.topLevelOrder.indexOf(scriptId)
+            val newOrder = s.topLevelOrder.toMutableList().apply {
+                add(if (insertIndex >= 0) insertIndex + 1 else size, newId)
+            }
+            s.copy(orphanScripts = s.orphanScripts + duplicated, topLevelOrder = newOrder)
+        }
     }
 
     suspend fun toggleOrphanEnabled(scriptId: String, disabled: Boolean) {
