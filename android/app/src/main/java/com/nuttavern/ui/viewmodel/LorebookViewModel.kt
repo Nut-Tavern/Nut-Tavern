@@ -81,4 +81,18 @@ class LorebookViewModel @Inject constructor(
             repository.updateEntries(lorebookId, orderedEntries)
         }
     }
+
+    fun duplicateEntry(lorebookId: String, entryUid: Int, currentEntries: List<LorebookEntry>) {
+        viewModelScope.launch {
+            val source = currentEntries.firstOrNull { it.uid == entryUid } ?: return@launch
+            val maxUid = currentEntries.maxOfOrNull { it.uid } ?: 0
+            val copy = source.copy(
+                uid = maxUid + 1,
+                comment = source.comment + "*",
+            )
+            val insertIndex = currentEntries.indexOfFirst { it.uid == entryUid } + 1
+            val updated = currentEntries.toMutableList().apply { add(insertIndex, copy) }
+            repository.updateEntries(lorebookId, updated)
+        }
+    }
 }

@@ -39,6 +39,8 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Boxes
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Trash2
@@ -123,6 +125,12 @@ fun LorebookDetailScreen(
         onReorderEntries = { ordered ->
             viewModel.reorderEntries(lorebookId, ordered)
         },
+        onDuplicateEntry = { uid ->
+            viewModel.duplicateEntry(lorebookId, uid, currentBook.entries)
+        },
+        onDeleteEntry = { uid ->
+            viewModel.deleteEntry(lorebookId, uid, currentBook.entries)
+        },
     )
 }
 
@@ -137,6 +145,8 @@ private fun LorebookDetailContent(
     onAddEntry: () -> Unit,
     onToggleEntry: (uid: Int, disabled: Boolean) -> Unit,
     onReorderEntries: (List<LorebookEntry>) -> Unit,
+    onDuplicateEntry: (uid: Int) -> Unit,
+    onDeleteEntry: (uid: Int) -> Unit,
 ) {
     // 设置 Tab 的草稿(名称 + 全局设置),条目操作即时生效不走草稿
     var draft by remember(initial.id) { mutableStateOf(initial) }
@@ -147,10 +157,17 @@ private fun LorebookDetailContent(
         draft.description != initial.description ||
         draft.scanDepth != initial.scanDepth ||
         draft.tokenBudget != initial.tokenBudget ||
+        draft.budgetCap != initial.budgetCap ||
         draft.recursiveScanning != initial.recursiveScanning ||
         draft.caseSensitive != initial.caseSensitive ||
         draft.matchWholeWords != initial.matchWholeWords ||
-        draft.maxRecursionSteps != initial.maxRecursionSteps
+        draft.maxRecursionSteps != initial.maxRecursionSteps ||
+        draft.minActivations != initial.minActivations ||
+        draft.minActivationsDepthMax != initial.minActivationsDepthMax ||
+        draft.includeNames != initial.includeNames ||
+        draft.overflowAlert != initial.overflowAlert ||
+        draft.useGroupScoring != initial.useGroupScoring ||
+        draft.characterStrategy != initial.characterStrategy
 
     var selectedTab by rememberSaveable { mutableStateOf(0) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
@@ -205,6 +222,8 @@ private fun LorebookDetailContent(
                     onEditEntry = onEditEntry,
                     onToggleEntry = onToggleEntry,
                     onReorderEntries = onReorderEntries,
+                    onDuplicateEntry = onDuplicateEntry,
+                    onDeleteEntry = onDeleteEntry,
                 )
                 1 -> SettingsTab(
                     draft = draft,
@@ -257,7 +276,12 @@ private fun EntriesTab(
     onEditEntry: (uid: Int) -> Unit,
     onToggleEntry: (uid: Int, disabled: Boolean) -> Unit,
     onReorderEntries: (List<LorebookEntry>) -> Unit,
+    onDuplicateEntry: (uid: Int) -> Unit,
+    onDeleteEntry: (uid: Int) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var longPressEntry by remember { mutableStateOf<LorebookEntry?>(null) }
+
     if (entries.isEmpty()) {
         Box(
             modifier = Modifier
@@ -306,6 +330,7 @@ private fun EntriesTab(
                     subtitle = entrySubtitle(entry),
                     elevated = isDragging,
                     onClick = { onEditEntry(entry.uid) },
+                    onLongClick = { longPressEntry = entry },
                     trailing = {
                         NutTavernEntitySwitch(
                             checked = !entry.disable,
@@ -320,6 +345,35 @@ private fun EntriesTab(
                 )
             }
         }
+    }
+
+    // 长按菜单
+    if (longPressEntry != null) {
+        val entry = longPressEntry!!
+        com.nuttavern.ui.components.NutTavernEntityActionsSheet(
+            title = entry.comment.ifBlank { "未命名条目" },
+            actions = listOf(
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Copy,
+                    title = "复制",
+                    onClick = { onDuplicateEntry(entry.uid) },
+                ),
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FileUp,
+                    title = "导出",
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                ),
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Trash2,
+                    title = "删除",
+                    destructive = true,
+                    onClick = { onDeleteEntry(entry.uid) },
+                ),
+            ),
+            onDismiss = { longPressEntry = null },
+        )
     }
 }
 
