@@ -40,10 +40,14 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
+import com.composables.icons.lucide.Trash2
 import com.nuttavern.ui.components.NutTavernShapeTokens
 import com.nuttavern.ui.viewmodel.RegexScriptViewModel
 import sh.calvin.reorderable.ReorderableItem
@@ -302,68 +306,50 @@ private fun RegexTopLevelList(
     // 长按菜单 Sheet
     val target = longPressTarget
     if (target != null) {
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = { longPressTarget = null },
-        ) {
-            androidx.compose.foundation.layout.Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                com.nuttavern.ui.components.NutTavernSheetTitle(title = target.name.ifBlank { "操作" })
-                // 默认开启 ↔ 默认关闭
-                com.nuttavern.ui.components.NutTavernSelectableRow(
+        com.nuttavern.ui.components.NutTavernEntityActionsSheet(
+            title = target.name,
+            actions = buildList {
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Check,
                     title = if (target.enabled) "设为默认关闭" else "设为默认开启",
-                    selected = false,
                     onClick = {
                         when (target) {
                             is LongPressTarget.Group -> onToggleGroup(target.id, !target.enabled)
                             is LongPressTarget.Orphan -> onToggleOrphan(target.id, target.enabled)
                         }
-                        longPressTarget = null
                     },
-                )
-                // 复制
-                com.nuttavern.ui.components.NutTavernSelectableRow(
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Copy,
                     title = "复制",
-                    selected = false,
                     onClick = {
                         when (target) {
                             is LongPressTarget.Group -> onDuplicateGroup(target.id)
                             is LongPressTarget.Orphan -> onDuplicateOrphan(target.id)
                         }
-                        longPressTarget = null
                     },
-                )
-                // 导出
-                com.nuttavern.ui.components.NutTavernSelectableRow(
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FileUp,
                     title = "导出",
-                    selected = false,
                     onClick = {
-                        android.widget.Toast.makeText(
-                            context,
-                            "功能开发中",
-                            android.widget.Toast.LENGTH_SHORT,
-                        ).show()
-                        longPressTarget = null
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
                     },
-                )
-                // 删除
-                com.nuttavern.ui.components.NutTavernSelectableRow(
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Trash2,
                     title = "删除",
-                    selected = false,
+                    destructive = true,
                     onClick = {
                         when (target) {
                             is LongPressTarget.Group -> onDeleteGroup(target.id)
                             is LongPressTarget.Orphan -> onDeleteOrphan(target.id)
                         }
-                        longPressTarget = null
                     },
-                )
-                Spacer(Modifier.padding(bottom = 16.dp))
-            }
-        }
+                ))
+            },
+            onDismiss = { longPressTarget = null },
+        )
     }
 }
         item(key = "hint") {

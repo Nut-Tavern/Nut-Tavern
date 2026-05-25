@@ -138,7 +138,7 @@ private fun LorebookDetailContent(
     onReorderEntries: (List<LorebookEntry>) -> Unit,
 ) {
     // 设置 Tab 的草稿(名称 + 全局设置),条目操作即时生效不走草稿
-    var draft by rememberSaveable(initial.id) { mutableStateOf(initial) }
+    var draft by remember(initial.id) { mutableStateOf(initial) }
     // 当外部 entries 变化时同步到 draft(条目操作即时落库,draft 只管设置字段)
     LaunchedEffect(initial) { draft = draft.copy(entries = initial.entries) }
 

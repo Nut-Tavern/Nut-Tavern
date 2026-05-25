@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
@@ -34,6 +35,7 @@ import com.composables.icons.lucide.FolderOpen
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
+import kotlinx.coroutines.launch
 
 /**
  * 模型卡片相关 token。维持"扁卡 + 行内能力胶囊"的视觉,与 rikkahub 的尺寸对齐
@@ -283,6 +285,7 @@ fun NutTavernEntityCard(
     leading: @Composable (() -> Unit)? = null,
     trailing: @Composable (() -> Unit)? = null,
 ) {
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
     val content: @Composable () -> Unit = {
         Row(
             modifier = Modifier
@@ -325,12 +328,17 @@ fun NutTavernEntityCard(
         .fillMaxWidth()
         .let { mod ->
             if (onClick != null || onLongClick != null) {
-                mod.then(
-                    Modifier.combinedClickable(
+                mod
+                    .clip(MaterialTheme.shapes.large)
+                    .combinedClickable(
                         onClick = onClick ?: {},
-                        onLongClick = onLongClick,
+                        onLongClick = onLongClick?.let { callback ->
+                            {
+                                haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                                callback()
+                            }
+                        },
                     )
-                )
             } else {
                 mod
             }
@@ -460,6 +468,114 @@ fun NutTavernEntitySwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
         )
+    }
+}
+
+// endregion
+
+// region ── 实体长按操作 Sheet ──────────────────────────────────────────────────
+
+/**
+ * 实体长按操作菜单的单个操作项描述。
+ *
+ * @param icon 操作图标
+ * @param title 操作标题
+ * @param destructive 是否为危险操作(删除等),会单独分组并染 error 色
+ * @param onClick 点击回调;Sheet 会在回调执行后自动关闭
+ */
+data class EntityAction(
+    val icon: ImageVector,
+    val title: String,
+    val destructive: Boolean = false,
+    val onClick: () -> Unit,
+)
+
+/**
+ * 实体列表页统一的长按操作 ModalBottomSheet。
+ *
+ * 内部管理 `sheetState` 的 hide 动画:点击操作项后先执行回调,再播放退出动画,
+ * 最后通过 [onDismiss] 通知调用方清空状态。调用方只需在 `onDismiss` 里把
+ * `longPressTarget = null` 即可,不需要自己处理 coroutine。
+ *
+ * 布局规则:
+ * - 普通操作(destructive=false)装在第一组 [NutTavernGroupSection]
+ * - 危险操作(destructive=true)装在第二组 [NutTavernGroupSection]
+ * - 组内项之间用 [NutTavernGroupDivider] 分隔
+ *
+ * @param title Sheet 顶部标题(通常是实体名称)
+ * @param actions 操作项列表,按传入顺序排列
+ * @param onDismiss 关闭回调(用户下滑关闭或操作完成后触发)
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun NutTavernEntityActionsSheet(
+    title: String,
+    actions: List<EntityAction>,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState()
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
+        ) {
+            NutTavernSheetTitle(title = title.ifBlank { "操作" })
+
+            val normalActions = actions.filter { !it.destructive }
+            val destructiveActions = actions.filter { it.destructive }
+
+            if (normalActions.isNotEmpty()) {
+                NutTavernGroupSection {
+                    normalActions.forEachIndexed { index, action ->
+                        if (index > 0) {
+                            NutTavernGroupDivider()
+                        }
+                        NutTavernIconRow(
+                            icon = action.icon,
+                            title = action.title,
+                            onClick = {
+                                action.onClick()
+                                scope.launch {
+                                    sheetState.hide()
+                                }.invokeOnCompletion {
+                                    onDismiss()
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (destructiveActions.isNotEmpty()) {
+                NutTavernGroupSection {
+                    destructiveActions.forEachIndexed { index, action ->
+                        if (index > 0) {
+                            NutTavernGroupDivider()
+                        }
+                        NutTavernIconRow(
+                            icon = action.icon,
+                            title = action.title,
+                            destructive = true,
+                            onClick = {
+                                action.onClick()
+                                scope.launch {
+                                    sheetState.hide()
+                                }.invokeOnCompletion {
+                                    onDismiss()
+                                }
+                            },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 

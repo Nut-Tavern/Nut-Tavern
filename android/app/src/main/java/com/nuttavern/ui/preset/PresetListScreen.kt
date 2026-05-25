@@ -40,6 +40,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileUp
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
@@ -148,46 +152,39 @@ fun PresetListScreen(
     // 长按菜单
     if (longPressPreset != null) {
         val lp = longPressPreset!!
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = { longPressPreset = null },
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                com.nuttavern.ui.components.NutTavernSheetTitle(title = lp.name.ifBlank { "操作" })
+        com.nuttavern.ui.components.NutTavernEntityActionsSheet(
+            title = lp.name,
+            actions = buildList {
                 if (!longPressIsDefault) {
-                    com.nuttavern.ui.components.NutTavernSelectableRow(
-                        title = "设为默认", selected = false,
-                        onClick = { pendingDefault = lp; longPressPreset = null },
-                    )
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.Check,
+                        title = "设为默认",
+                        onClick = { pendingDefault = lp },
+                    ))
                 }
-                com.nuttavern.ui.components.NutTavernSelectableRow(
-                    title = "复制", selected = false,
-                    onClick = {
-                        viewModel.duplicate(lp.id)
-                        longPressPreset = null
-                    },
-                )
-                com.nuttavern.ui.components.NutTavernSelectableRow(
-                    title = "导出", selected = false,
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Copy,
+                    title = "复制",
+                    onClick = { viewModel.duplicate(lp.id) },
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FileUp,
+                    title = "导出",
                     onClick = {
                         android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
-                        longPressPreset = null
                     },
-                )
+                ))
                 if (!lp.isBuiltInDefault) {
-                    com.nuttavern.ui.components.NutTavernSelectableRow(
-                        title = "删除", selected = false,
-                        onClick = {
-                            viewModel.delete(lp.id)
-                            longPressPreset = null
-                        },
-                    )
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.Trash2,
+                        title = "删除",
+                        destructive = true,
+                        onClick = { viewModel.delete(lp.id) },
+                    ))
                 }
-                Spacer(Modifier.padding(bottom = 16.dp))
-            }
-        }
+            },
+            onDismiss = { longPressPreset = null },
+        )
     }
 }
 

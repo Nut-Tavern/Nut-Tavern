@@ -40,6 +40,10 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileUp
+import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
@@ -295,6 +299,49 @@ private fun UserPersonaListBody(
                 )
             }
         }
+    }
+
+    // 长按菜单
+    if (longPressPersonaId != null) {
+        com.nuttavern.ui.components.NutTavernEntityActionsSheet(
+            title = longPressPersonaName,
+            actions = buildList {
+                if (!longPressIsDefault) {
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.Check,
+                        title = "设为默认",
+                        onClick = {
+                            longPressPersonaId?.let { id ->
+                                onCardClick(items.first { it.persona.id == id }.persona, false)
+                            }
+                        },
+                    ))
+                }
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Copy,
+                    title = "复制",
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FileUp,
+                    title = "导出",
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Trash2,
+                    title = "删除",
+                    destructive = true,
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                ))
+            },
+            onDismiss = { longPressPersonaId = null },
+        )
     }
 }
 

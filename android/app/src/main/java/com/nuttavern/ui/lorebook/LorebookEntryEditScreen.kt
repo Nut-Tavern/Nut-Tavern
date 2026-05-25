@@ -78,7 +78,7 @@ fun LorebookEntryEditScreen(
         return
     }
 
-    var draft by rememberSaveable(entryUid) { mutableStateOf(initial) }
+    var draft by remember(entryUid) { mutableStateOf(initial) }
     val isDirty = draft != initial
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
