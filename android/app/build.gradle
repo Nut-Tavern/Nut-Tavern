@@ -169,6 +169,10 @@ dependencies {
 
     implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0"
 
+    // Token 计数:纯 JVM 的 OpenAI tiktoken 实现,零依赖,Android 兼容。
+    // 用 cl100k_base 编码估算所有模型的 token 数(非 OpenAI 模型误差 ±15% 以内)。
+    implementation "com.knuddels:jtokkit:1.1.0"
+
     testImplementation "junit:junit:4.13.2"
     testImplementation "org.json:json:20240303"
 

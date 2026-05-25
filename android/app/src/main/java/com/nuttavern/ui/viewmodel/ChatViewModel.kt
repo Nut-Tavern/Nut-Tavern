@@ -1368,7 +1368,7 @@ class ChatViewModel @Inject constructor(
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         // 世界书激活:合并全局选中 + 角色内嵌世界书
-        val lorebookResult = runLorebookActivation(history, character, preset)
+        val lorebookResult = runLorebookActivation(history, character, preset, persona)
 
         return PromptComposerInput(
             userMessage = userMessage,
@@ -1390,6 +1390,7 @@ class ChatViewModel @Inject constructor(
         history: List<HistoryMessage>,
         character: com.nuttavern.data.character.Character?,
         preset: com.nuttavern.data.preset.Preset,
+        persona: com.nuttavern.data.persona.UserPersona?,
     ): com.nuttavern.lorebook.LorebookEngine.ActivationResult? {
         val globalSelectedIds = lorebookRepository.globalSelectedIds.first()
         val allBooks = lorebookRepository.lorebooks.first()
@@ -1428,22 +1429,58 @@ class ChatViewModel @Inject constructor(
                         useProbability = entry.useProbability ?: true,
                         excludeRecursion = entry.excludeRecursion ?: false,
                         preventRecursion = entry.preventRecursion ?: false,
+                        matchPersonaDescription = entry.matchPersonaDescription ?: false,
+                        matchCharacterDescription = entry.matchCharacterDescription ?: false,
+                        matchCharacterPersonality = entry.matchCharacterPersonality ?: false,
+                        matchCharacterDepthPrompt = entry.matchCharacterDepthPrompt ?: false,
+                        matchScenario = entry.matchScenario ?: false,
+                        matchCreatorNotes = entry.matchCreatorNotes ?: false,
+                        characterFilter = entry.characterFilter,
+                        vectorized = entry.vectorized ?: false,
+                        automationId = entry.automationId ?: "",
                     )
                 },
             )
         }
 
-        val lorebooks = buildList {
-            if (characterBook != null) add(characterBook)
-            addAll(selectedBooks)
+        val taggedLorebooks = buildList {
+            if (characterBook != null) {
+                add(com.nuttavern.lorebook.TaggedLorebook(book = characterBook, isCharacterSource = true))
+            }
+            for (book in selectedBooks) {
+                add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = false))
+            }
         }
-        if (lorebooks.isEmpty()) return null
+        if (taggedLorebooks.isEmpty()) return null
 
-        val messages = history.map { it.content }.reversed() // LorebookEngine 期望 index 0 = 最新
+        val messages = history.map { it.content }.reversed()
+        val userName = persona?.name?.takeIf { it.isNotBlank() } ?: "User"
+        val charName = character?.name?.takeIf { it.isNotBlank() } ?: "Assistant"
+        val messageNames = history.map { msg ->
+            when (msg.role) {
+                "user" -> userName
+                "assistant" -> charName
+                else -> "System"
+            }
+        }.reversed()
+
+        val scanContext = com.nuttavern.lorebook.LorebookEngine.ScanContext(
+            currentCharacterId = character?.id,
+            personaDescription = persona?.description.orEmpty(),
+            characterDescription = character?.description.orEmpty(),
+            characterPersonality = character?.personality.orEmpty(),
+            characterDepthPrompt = "", // V3 extensions.depth_prompt.prompt,当前未解析
+            scenario = character?.scenario.orEmpty(),
+            creatorNotes = character?.creatorNotes.orEmpty(),
+            maxContextTokens = preset.openaiMaxContext,
+        )
+
         return lorebookEngine.activate(
             messages = messages,
-            lorebooks = lorebooks,
+            messageNames = messageNames,
+            lorebooks = taggedLorebooks,
             wiFormat = preset.wiFormat,
+            scanContext = scanContext,
         )
     }
 

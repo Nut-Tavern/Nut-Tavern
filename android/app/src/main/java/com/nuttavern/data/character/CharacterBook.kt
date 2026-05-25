@@ -57,4 +57,15 @@ data class CharacterBookEntry(
     @SerialName("sticky") val sticky: Int? = null,
     @SerialName("cooldown") val cooldown: Int? = null,
     @SerialName("delay") val delay: Int? = null,
+    // ── 扫描范围扩展(match* 系列) ──
+    @SerialName("matchPersonaDescription") val matchPersonaDescription: Boolean? = null,
+    @SerialName("matchCharacterDescription") val matchCharacterDescription: Boolean? = null,
+    @SerialName("matchCharacterPersonality") val matchCharacterPersonality: Boolean? = null,
+    @SerialName("matchCharacterDepthPrompt") val matchCharacterDepthPrompt: Boolean? = null,
+    @SerialName("matchScenario") val matchScenario: Boolean? = null,
+    @SerialName("matchCreatorNotes") val matchCreatorNotes: Boolean? = null,
+    // ── 角色过滤器 ──
+    @SerialName("character_filter") val characterFilter: com.nuttavern.data.lorebook.CharacterFilter? = null,
+    // ── 兼容性存盘 ──
+    val vectorized: Boolean? = null,
 )

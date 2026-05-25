@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Boxes
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Trash2
@@ -332,12 +333,89 @@ private fun entrySubtitle(entry: LorebookEntry): String {
 
 // region 设置 Tab
 
+private enum class MutualExclusionTarget { MAX_RECURSION, MIN_ACTIVATIONS }
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SettingsTab(
     draft: Lorebook,
     onDraftChange: (Lorebook) -> Unit,
     onShowDeleteDialog: () -> Unit,
 ) {
+    var pendingMutualExclusion by remember { mutableStateOf<Pair<MutualExclusionTarget, Int>?>(null) }
+    var showStrategySheet by remember { mutableStateOf(false) }
+
+    // 互斥确认弹窗
+    pendingMutualExclusion?.let { (target, value) ->
+        val otherLabel = when (target) {
+            MutualExclusionTarget.MAX_RECURSION -> "最少激活条目数"
+            MutualExclusionTarget.MIN_ACTIVATIONS -> "最大递归步数"
+        }
+        AlertDialog(
+            onDismissRequest = { pendingMutualExclusion = null },
+            title = { Text("互斥配置") },
+            text = { Text("此设置与「$otherLabel」互斥,确认修改将把「$otherLabel」重置为 0。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    when (target) {
+                        MutualExclusionTarget.MAX_RECURSION ->
+                            onDraftChange(draft.copy(maxRecursionSteps = value, minActivations = 0, minActivationsDepthMax = 0))
+                        MutualExclusionTarget.MIN_ACTIVATIONS ->
+                            onDraftChange(draft.copy(minActivations = value, maxRecursionSteps = 0))
+                    }
+                    pendingMutualExclusion = null
+                }) { Text("确认") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingMutualExclusion = null }) { Text("取消") }
+            },
+        )
+    }
+
+    // 合并策略选择 Sheet
+    if (showStrategySheet) {
+        androidx.compose.material3.ModalBottomSheet(
+            onDismissRequest = { showStrategySheet = false },
+        ) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
+            ) {
+                com.nuttavern.ui.components.NutTavernSheetTitle(title = "合并策略")
+                NutTavernGroupSection {
+                    com.nuttavern.ui.components.NutTavernSelectableRow(
+                        title = "角色优先",
+                        subtitle = "角色条目排前面,预算不够时角色条目优先注入",
+                        selected = draft.characterStrategy == com.nuttavern.data.lorebook.WiCharacterStrategy.CHARACTER_FIRST,
+                        onClick = {
+                            onDraftChange(draft.copy(characterStrategy = com.nuttavern.data.lorebook.WiCharacterStrategy.CHARACTER_FIRST))
+                            showStrategySheet = false
+                        },
+                    )
+                    NutTavernGroupDivider()
+                    com.nuttavern.ui.components.NutTavernSelectableRow(
+                        title = "全局优先",
+                        subtitle = "全局条目排前面",
+                        selected = draft.characterStrategy == com.nuttavern.data.lorebook.WiCharacterStrategy.GLOBAL_FIRST,
+                        onClick = {
+                            onDraftChange(draft.copy(characterStrategy = com.nuttavern.data.lorebook.WiCharacterStrategy.GLOBAL_FIRST))
+                            showStrategySheet = false
+                        },
+                    )
+                    NutTavernGroupDivider()
+                    com.nuttavern.ui.components.NutTavernSelectableRow(
+                        title = "均匀混合",
+                        subtitle = "全局和角色条目统一按 order 排序",
+                        selected = draft.characterStrategy == com.nuttavern.data.lorebook.WiCharacterStrategy.EVENLY,
+                        onClick = {
+                            onDraftChange(draft.copy(characterStrategy = com.nuttavern.data.lorebook.WiCharacterStrategy.EVENLY))
+                            showStrategySheet = false
+                        },
+                    )
+                }
+            }
+        }
+    }
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -388,12 +466,72 @@ private fun SettingsTab(
                 )
                 NutTavernGroupDivider()
                 NutTavernNumericField(
+                    label = "预算硬上限",
+                    value = draft.budgetCap,
+                    onValueChange = { it?.let { v -> onDraftChange(draft.copy(budgetCap = v)) } },
+                    parser = NumericParser.IntParser,
+                    helperText = "0 = 不限制;非零时取 min(百分比预算, 此值)",
+                    min = 0,
+                )
+                NutTavernGroupDivider()
+                NutTavernNumericField(
                     label = "最大递归步数",
                     value = draft.maxRecursionSteps,
-                    onValueChange = { it?.let { v -> onDraftChange(draft.copy(maxRecursionSteps = v)) } },
+                    onValueChange = { newValue ->
+                        val v = newValue ?: return@NutTavernNumericField
+                        if (v > 0 && draft.minActivations > 0) {
+                            pendingMutualExclusion = MutualExclusionTarget.MAX_RECURSION to v
+                        } else {
+                            onDraftChange(draft.copy(maxRecursionSteps = v))
+                        }
+                    },
                     parser = NumericParser.IntParser,
                     helperText = "0 = 不限制递归深度",
                     min = 0,
+                )
+                NutTavernGroupDivider()
+                NutTavernNumericField(
+                    label = "最少激活条目数",
+                    value = draft.minActivations,
+                    onValueChange = { newValue ->
+                        val v = newValue ?: return@NutTavernNumericField
+                        if (v > 0 && draft.maxRecursionSteps > 0) {
+                            pendingMutualExclusion = MutualExclusionTarget.MIN_ACTIVATIONS to v
+                        } else {
+                            onDraftChange(draft.copy(minActivations = v))
+                        }
+                    },
+                    parser = NumericParser.IntParser,
+                    helperText = "不够则扩大扫描深度继续找;0 = 禁用",
+                    min = 0,
+                )
+                if (draft.minActivations > 0) {
+                    NutTavernGroupDivider()
+                    NutTavernNumericField(
+                        label = "最少激活扩展深度上限",
+                        value = draft.minActivationsDepthMax,
+                        onValueChange = { it?.let { v -> onDraftChange(draft.copy(minActivationsDepthMax = v)) } },
+                        parser = NumericParser.IntParser,
+                        helperText = "0 = 不限制,只受聊天长度约束",
+                        min = 0,
+                    )
+                }
+            }
+        }
+
+        item(key = "strategy") {
+            NutTavernGroupSection {
+                NutTavernIconRow(
+                    icon = Lucide.Boxes,
+                    title = "合并策略",
+                    subtitle = when (draft.characterStrategy) {
+                        com.nuttavern.data.lorebook.WiCharacterStrategy.EVENLY -> "均匀混合"
+                        com.nuttavern.data.lorebook.WiCharacterStrategy.CHARACTER_FIRST -> "角色优先"
+                        com.nuttavern.data.lorebook.WiCharacterStrategy.GLOBAL_FIRST -> "全局优先"
+                        else -> "角色优先"
+                    },
+                    onClick = { showStrategySheet = true },
+                    showTrailingChevron = true,
                 )
             }
         }
@@ -419,6 +557,20 @@ private fun SettingsTab(
                     subtitle = "关键词必须是完整单词,不匹配子串",
                     checked = draft.matchWholeWords,
                     onCheckedChange = { onDraftChange(draft.copy(matchWholeWords = it)) },
+                )
+                NutTavernGroupDivider()
+                SwitchRow(
+                    label = "包含发言者名称",
+                    subtitle = "扫描缓冲区每条消息前加\"Name: \"",
+                    checked = draft.includeNames,
+                    onCheckedChange = { onDraftChange(draft.copy(includeNames = it)) },
+                )
+                NutTavernGroupDivider()
+                SwitchRow(
+                    label = "互斥组评分模式",
+                    subtitle = "同组条目按关键词命中数竞争,得分低的淘汰",
+                    checked = draft.useGroupScoring,
+                    onCheckedChange = { onDraftChange(draft.copy(useGroupScoring = it)) },
                 )
             }
         }

@@ -1,19 +1,23 @@
 package com.nuttavern.ui.lorebook
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -42,6 +46,7 @@ import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.ChevronUp
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.UserRound
 import com.nuttavern.data.lorebook.LorebookEntry
 import com.nuttavern.data.lorebook.SelectiveLogic
 import com.nuttavern.data.lorebook.WiPosition
@@ -83,6 +88,8 @@ fun LorebookEntryEditScreen(
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var advancedExpanded by remember { mutableStateOf(false) }
+    var scanScopeExpanded by remember { mutableStateOf(false) }
+    var showCharacterFilterSheet by remember { mutableStateOf(false) }
 
     val triggerBack: () -> Unit = {
         if (isDirty) showDiscardDialog = true else onBack()
@@ -317,6 +324,79 @@ fun LorebookEntryEditScreen(
                 }
             }
 
+            // 扫描范围扩展(match* 系列)
+            item(key = "scan-scope-header") {
+                NutTavernExpandableHeader(
+                    title = "扫描范围扩展",
+                    expanded = scanScopeExpanded,
+                    onClick = { scanScopeExpanded = !scanScopeExpanded },
+                )
+            }
+            if (scanScopeExpanded) {
+                item(key = "scan-scope") {
+                    NutTavernGroupSection {
+                        SwitchRow(
+                            label = "匹配用户身份描述",
+                            subtitle = "关键词额外扫描当前用户身份的描述文本",
+                            checked = draft.matchPersonaDescription,
+                            onCheckedChange = { draft = draft.copy(matchPersonaDescription = it) },
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "匹配角色描述",
+                            subtitle = "关键词额外扫描角色 description 字段",
+                            checked = draft.matchCharacterDescription,
+                            onCheckedChange = { draft = draft.copy(matchCharacterDescription = it) },
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "匹配角色性格",
+                            subtitle = "关键词额外扫描角色 personality 字段",
+                            checked = draft.matchCharacterPersonality,
+                            onCheckedChange = { draft = draft.copy(matchCharacterPersonality = it) },
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "匹配角色深度提示",
+                            subtitle = "关键词额外扫描角色 depth prompt",
+                            checked = draft.matchCharacterDepthPrompt,
+                            onCheckedChange = { draft = draft.copy(matchCharacterDepthPrompt = it) },
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "匹配场景",
+                            subtitle = "关键词额外扫描角色 scenario 字段",
+                            checked = draft.matchScenario,
+                            onCheckedChange = { draft = draft.copy(matchScenario = it) },
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "匹配创作者备注",
+                            subtitle = "关键词额外扫描角色 creator_notes 字段",
+                            checked = draft.matchCreatorNotes,
+                            onCheckedChange = { draft = draft.copy(matchCreatorNotes = it) },
+                        )
+                    }
+                }
+            }
+
+            // 角色过滤器
+            item(key = "character-filter") {
+                NutTavernGroupSection {
+                    NutTavernIconRow(
+                        icon = Lucide.UserRound,
+                        title = "角色过滤器",
+                        subtitle = draft.characterFilter?.let { cf ->
+                            val mode = if (cf.isExclude) "排除" else "仅限"
+                            val count = cf.names.size
+                            if (count == 0) "未设置" else "$mode $count 个角色"
+                        } ?: "未设置(对所有角色生效)",
+                        onClick = { showCharacterFilterSheet = true },
+                        showTrailingChevron = true,
+                    )
+                }
+            }
+
             // 删除
             item(key = "delete") {
                 NutTavernGroupSection {
@@ -361,6 +441,18 @@ fun LorebookEntryEditScreen(
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             },
+        )
+    }
+
+    // 角色过滤器编辑 Sheet
+    if (showCharacterFilterSheet) {
+        CharacterFilterSheet(
+            currentFilter = draft.characterFilter,
+            onApply = { newFilter ->
+                draft = draft.copy(characterFilter = newFilter)
+                showCharacterFilterSheet = false
+            },
+            onDismiss = { showCharacterFilterSheet = false },
         )
     }
 }
@@ -480,6 +572,104 @@ private fun NutTavernExpandableHeader(
                 modifier = Modifier.size(18.dp),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+    }
+}
+
+// endregion
+
+// region 角色过滤器 Sheet
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CharacterFilterSheet(
+    currentFilter: com.nuttavern.data.lorebook.CharacterFilter?,
+    onApply: (com.nuttavern.data.lorebook.CharacterFilter?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val characterViewModel: com.nuttavern.ui.viewmodel.CharacterViewModel = hiltViewModel()
+    val characters by characterViewModel.characters.collectAsState()
+
+    var isExclude by remember { mutableStateOf(currentFilter?.isExclude ?: false) }
+    var selectedIds by remember { mutableStateOf(currentFilter?.names?.toSet() ?: emptySet()) }
+
+    ModalBottomSheet(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(0.7f)
+                .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            com.nuttavern.ui.components.NutTavernSheetTitle(
+                title = "角色过滤器",
+                description = if (isExclude) "排除选中的角色(黑名单)" else "仅对选中的角色生效(白名单)",
+            )
+
+            // 白名单/黑名单切换
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("排除模式", modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                Switch(checked = isExclude, onCheckedChange = { isExclude = it })
+            }
+
+            // 角色列表
+            LazyColumn(modifier = Modifier.weight(1f)) {
+                items(characters, key = { it.id }) { character ->
+                    val checked = character.id in selectedIds
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                selectedIds = if (checked) selectedIds - character.id
+                                else selectedIds + character.id
+                            }
+                            .padding(horizontal = 4.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Checkbox(checked = checked, onCheckedChange = { isChecked ->
+                            selectedIds = if (isChecked) selectedIds + character.id
+                            else selectedIds - character.id
+                        })
+                        Text(
+                            text = character.name.ifBlank { "未命名角色" },
+                            style = MaterialTheme.typography.bodyLarge,
+                            modifier = Modifier.weight(1f),
+                        )
+                    }
+                }
+                if (characters.isEmpty()) {
+                    item {
+                        Text(
+                            text = "暂无角色",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 16.dp),
+                        )
+                    }
+                }
+            }
+
+            // 操作按钮
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+            ) {
+                TextButton(onClick = { onApply(null) }) { Text("清除过滤") }
+                TextButton(onClick = {
+                    if (selectedIds.isEmpty()) {
+                        onApply(null)
+                    } else {
+                        onApply(com.nuttavern.data.lorebook.CharacterFilter(
+                            isExclude = isExclude,
+                            names = selectedIds.toList(),
+                        ))
+                    }
+                }) { Text("应用") }
+            }
         }
     }
 }
