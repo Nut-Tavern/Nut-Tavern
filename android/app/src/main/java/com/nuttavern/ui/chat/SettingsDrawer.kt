@@ -61,11 +61,13 @@ internal fun SettingsDrawer(
     currentPreset: Preset?,
     globalRegexScripts: List<RegexScript>,
     regexCounts: Pair<Int, Int>,
+    lorebookCounts: Pair<Int, Int>,
     onOpenUnavailableFeature: (String) -> Unit,
     onOpenPersonaPicker: () -> Unit,
     onOpenPresetPicker: () -> Unit,
     onOpenRegexPicker: () -> Unit,
     onNavigateToCharacterDetail: (characterId: String) -> Unit,
+    onNavigateToLorebook: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -111,12 +113,9 @@ internal fun SettingsDrawer(
                         onClick = onOpenRegexPicker,
                     )
                     NutTavernGroupDivider()
-                    DrawerStaticItems(
-                        items = listOf(
-                            DrawerItem("世界书", "世界信息、条目触发与上下文注入", Lucide.BookOpenText) {
-                                onOpenUnavailableFeature("世界书")
-                            },
-                        ),
+                    LorebookEntryRow(
+                        counts = lorebookCounts,
+                        onClick = onNavigateToLorebook,
                     )
                 }
             }
@@ -251,6 +250,29 @@ private fun RegexEntryRow(
     NutTavernIconRow(
         icon = Lucide.Regex,
         title = "我的正则",
+        subtitle = subtitle,
+        showTrailingChevron = true,
+        onClick = onClick,
+    )
+}
+
+/**
+ * "世界书"动态行。显示总数 / 选中数。
+ */
+@Composable
+private fun LorebookEntryRow(
+    counts: Pair<Int, Int>,
+    onClick: () -> Unit,
+) {
+    val (total, selected) = counts
+    val subtitle = when {
+        total == 0 -> "暂无世界书"
+        selected == 0 -> "共 $total 本,未选中"
+        else -> "共 $total 本,已选中 $selected 本"
+    }
+    NutTavernIconRow(
+        icon = Lucide.BookOpenText,
+        title = "世界书",
         subtitle = subtitle,
         showTrailingChevron = true,
         onClick = onClick,

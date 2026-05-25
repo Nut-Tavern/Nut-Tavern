@@ -226,6 +226,18 @@ class ChatViewModel @Inject constructor(
         initialValue = 0 to 0,
     )
 
+    /** 世界书总数 / 全局选中数,供 SettingsDrawer 显示。 */
+    val lorebookCounts: StateFlow<Pair<Int, Int>> = combine(
+        lorebookRepository.lorebooks,
+        lorebookRepository.globalSelectedIds,
+    ) { books, selectedIds ->
+        books.size to selectedIds.size
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = 0 to 0,
+    )
+
     private var streamingJob: Job? = null
     private var streamingReasoningStartedAtMillis: Long? = null
     private var streamingReasoningEndedAtMillis: Long? = null

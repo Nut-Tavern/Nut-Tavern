@@ -50,6 +50,7 @@ fun ChatScreen(
     onNavigateToCharacterDetail: (characterId: String) -> Unit = {},
     onNavigateToPresetDetail: (presetId: String) -> Unit = {},
     onNavigateToRegexDetail: (regexId: String) -> Unit = {},
+    onNavigateToLorebookList: () -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val messages by viewModel.currentMessages.collectAsState()
@@ -75,6 +76,7 @@ fun ChatScreen(
     val currentPresetId by viewModel.currentPresetId.collectAsState()
     val globalRegexScripts by viewModel.globalRegexScripts.collectAsState()
     val regexCounts by viewModel.regexCounts.collectAsState()
+    val lorebookCounts by viewModel.lorebookCounts.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
@@ -182,6 +184,7 @@ fun ChatScreen(
                             currentPreset = currentPreset,
                             globalRegexScripts = globalRegexScripts,
                             regexCounts = regexCounts,
+                            lorebookCounts = lorebookCounts,
                             onOpenUnavailableFeature = { featureName ->
                                 pendingSidebarFeatureNotice = featureName
                             },
@@ -200,6 +203,10 @@ fun ChatScreen(
                             onNavigateToCharacterDetail = { characterId ->
                                 coroutineScope.launch { settingsDrawerState.close() }
                                 onNavigateToCharacterDetail(characterId)
+                            },
+                            onNavigateToLorebook = {
+                                coroutineScope.launch { settingsDrawerState.close() }
+                                onNavigateToLorebookList()
                             },
                             onDismiss = { coroutineScope.launch { settingsDrawerState.close() } },
                         )

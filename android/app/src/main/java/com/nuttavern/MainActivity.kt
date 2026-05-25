@@ -114,6 +114,9 @@ private fun NutTavernNavGraph() {
                 onNavigateToRegexDetail = { regexId ->
                     navController.navigate(Routes.regexDetail(regexId))
                 },
+                onNavigateToLorebookList = {
+                    navController.navigate(Routes.Lorebooks)
+                },
             )
         }
         composable(
