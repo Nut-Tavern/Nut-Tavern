@@ -121,18 +121,10 @@ private fun PresetPickerCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
+                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            IconButton(onClick = onEdit) {
-                Icon(
-                    imageVector = Lucide.Pencil,
-                    contentDescription = "编辑",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = name,
@@ -156,6 +148,14 @@ private fun PresetPickerCard(
                     label = "使用中",
                     container = MaterialTheme.colorScheme.tertiary,
                     content = MaterialTheme.colorScheme.onTertiary,
+                )
+            }
+            IconButton(onClick = onEdit) {
+                Icon(
+                    imageVector = Lucide.Pencil,
+                    contentDescription = "编辑",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
