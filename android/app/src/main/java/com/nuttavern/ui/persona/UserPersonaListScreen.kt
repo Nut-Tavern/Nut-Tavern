@@ -259,11 +259,9 @@ private fun UserPersonaListBody(
     ) {
         if (noneItem != null) {
             item(key = noneItem.persona.id) {
-                UserPersonaCard(
-                    persona = noneItem.persona,
+                NonePersonaFixedRow(
                     isDefault = noneItem.isDefault,
                     onClick = { onCardClick(noneItem.persona, noneItem.isDefault) },
-                    dragHandle = { Spacer(Modifier.size(20.dp)) },
                 )
             }
         }
@@ -398,6 +396,45 @@ private fun SetDefaultPersonaDialog(
             TextButton(onClick = onDismiss) { Text("取消") }
         },
     )
+}
+
+/**
+ * "不使用身份"固定行。轻量样式,不是卡片。
+ * 和 PersonaPickerSheet 里的 NonePersonaRow 视觉对齐。
+ */
+@Composable
+private fun NonePersonaFixedRow(
+    isDefault: Boolean,
+    onClick: () -> Unit,
+) {
+    androidx.compose.material3.Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        onClick = onClick,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                text = "不使用身份",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.weight(1f),
+            )
+            if (isDefault) {
+                com.nuttavern.ui.components.NutTavernEntityStatusPill(
+                    label = "默认",
+                    container = MaterialTheme.colorScheme.tertiary,
+                    content = MaterialTheme.colorScheme.onTertiary,
+                )
+            }
+        }
+    }
 }
 
 private const val REAL_LIST_OFFSET = 1
