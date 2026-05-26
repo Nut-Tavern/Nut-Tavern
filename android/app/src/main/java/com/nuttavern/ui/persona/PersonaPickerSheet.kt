@@ -1,6 +1,5 @@
 package com.nuttavern.ui.persona
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -35,7 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.nuttavern.data.persona.UserPersona
-import com.nuttavern.ui.components.NutTavernSelectedCheckIcon
+import com.nuttavern.ui.components.NutTavernEntityStatusPill
 import com.nuttavern.ui.components.NutTavernSheetTitle
 import com.nuttavern.ui.viewmodel.UserPersonaViewModel
 
@@ -122,15 +121,10 @@ private fun NonePersonaRow(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
-    val bgColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-    else MaterialTheme.colorScheme.surfaceContainerHigh
-    val textColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-    else MaterialTheme.colorScheme.onSurfaceVariant
-
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = bgColor,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         onClick = onClick,
     ) {
         Row(
@@ -138,15 +132,20 @@ private fun NonePersonaRow(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
                 text = "不使用身份",
                 style = MaterialTheme.typography.bodyLarge,
-                color = textColor,
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
             if (selected) {
-                NutTavernSelectedCheckIcon()
+                NutTavernEntityStatusPill(
+                    label = "使用中",
+                    container = MaterialTheme.colorScheme.tertiary,
+                    content = MaterialTheme.colorScheme.onTertiary,
+                )
             }
         }
     }
@@ -160,44 +159,19 @@ private fun PersonaPickerCard(
     onClick: () -> Unit,
     onEdit: () -> Unit,
 ) {
-    val bgColor = if (selected) MaterialTheme.colorScheme.primaryContainer
-    else MaterialTheme.colorScheme.surfaceContainerHigh
-    val titleColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-    else MaterialTheme.colorScheme.onSurface
-    val subtitleColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.72f)
-    else MaterialTheme.colorScheme.onSurfaceVariant
-
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
-        color = bgColor,
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
         onClick = onClick,
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+                .padding(start = 4.dp, end = 12.dp, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = name,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = titleColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (!subtitle.isNullOrBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = subtitleColor,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
             IconButton(onClick = onEdit) {
                 Icon(
                     imageVector = Lucide.Pencil,
@@ -206,8 +180,30 @@ private fun PersonaPickerCard(
                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = name,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
             if (selected) {
-                NutTavernSelectedCheckIcon()
+                NutTavernEntityStatusPill(
+                    label = "使用中",
+                    container = MaterialTheme.colorScheme.tertiary,
+                    content = MaterialTheme.colorScheme.onTertiary,
+                )
             }
         }
     }
