@@ -345,6 +345,15 @@ private fun EntriesTab(
                 )
             }
         }
+        item(key = "hint") {
+            Text(
+                text = "长按卡片进行更多操作",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
     }
 
     // 长按菜单

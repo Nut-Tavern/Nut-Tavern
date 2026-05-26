@@ -216,6 +216,23 @@ class RegexScriptRepository @Inject constructor(
         }
     }
 
+    /**
+     * 批量设置组和散规则的启用状态。用于 Picker Sheet 的"应用"操作。
+     *
+     * @param enabledGroupIds 应该启用的组 id 集合(不在集合中的组设为 disabled)
+     * @param enabledOrphanIds 应该启用的散规则 id 集合(不在集合中的散规则设为 disabled)
+     */
+    suspend fun applyEnabledState(enabledGroupIds: Set<String>, enabledOrphanIds: Set<String>) {
+        dataStore.mutate { s ->
+            s.copy(
+                groups = s.groups.map { g -> g.copy(enabled = g.id in enabledGroupIds) },
+                orphanScripts = s.orphanScripts.map { script ->
+                    script.copy(disabled = script.id !in enabledOrphanIds)
+                },
+            )
+        }
+    }
+
     // ─── 顶层排序 ─────────────────────────────────────────────────────────────
 
     suspend fun reorderTopLevel(orderedIds: List<String>) {

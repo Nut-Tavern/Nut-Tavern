@@ -66,8 +66,8 @@ internal fun SettingsDrawer(
     onOpenPersonaPicker: () -> Unit,
     onOpenPresetPicker: () -> Unit,
     onOpenRegexPicker: () -> Unit,
+    onOpenLorebookPicker: () -> Unit,
     onNavigateToCharacterDetail: (characterId: String) -> Unit,
-    onNavigateToLorebook: () -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -115,7 +115,7 @@ internal fun SettingsDrawer(
                     NutTavernGroupDivider()
                     LorebookEntryRow(
                         counts = lorebookCounts,
-                        onClick = onNavigateToLorebook,
+                        onClick = onOpenLorebookPicker,
                     )
                 }
             }

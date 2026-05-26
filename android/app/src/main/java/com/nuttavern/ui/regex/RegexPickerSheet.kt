@@ -1,7 +1,6 @@
 package com.nuttavern.ui.regex
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,47 +10,46 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.composables.icons.lucide.FolderOpen
 import com.composables.icons.lucide.Lucide
-import com.composables.icons.lucide.Plus
-import com.composables.icons.lucide.Regex
-import com.nuttavern.ui.components.NutTavernEntityCard
-import com.nuttavern.ui.components.NutTavernEntitySwitch
+import com.composables.icons.lucide.Pencil
 import com.nuttavern.ui.components.NutTavernSheetTitle
 import com.nuttavern.ui.viewmodel.RegexScriptViewModel
 
 /**
- * 右侧栏的"我的正则"抽屉。显示全部组 + 散规则,Switch 控制启用状态。
+ * 右侧栏的"正则选择"抽屉。
  *
- * 与 [RegexListScreen] 同源 — 共用 [RegexScriptViewModel.topLevelItems]。
- * 区别:
- * - 没有拖排序;
- * - 顶部一个"+"快捷新建按钮;
- * - 卡片视觉走 [NutTavernEntityCard] 公共组件,与设置页保持一致;
- * - leading:静态语义图标(组 = FolderOpen / 散规则 = Regex),无入口按钮 — 抽屉里
- *   不提供"进组"和"编辑"动作,这两个走设置页;
- * - trailing:启用 Switch,无拖把手。
+ * 暂存 Switch 状态,只有点"应用"才写入。下滑/点外部关闭 = 取消修改。
+ * 卡片无左侧图标,Switch 左侧有编辑键。
+ * 编辑键点击后关闭 Sheet 并导航到编辑页(组 → 组内列表,散 → 正则编辑)。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RegexPickerSheet(
     visible: Boolean,
-    onCreateRegex: () -> Unit,
-    onOpenRegexDetail: (regexId: String) -> Unit,
+    onApply: (enabledGroupIds: Set<String>, enabledOrphanIds: Set<String>) -> Unit,
+    onEdit: (id: String, isGroup: Boolean) -> Unit,
     onDismiss: () -> Unit,
     viewModel: RegexScriptViewModel = hiltViewModel(),
 ) {
@@ -59,6 +57,18 @@ fun RegexPickerSheet(
 
     val topLevelItems by viewModel.topLevelItems.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    // 暂存启用状态
+    var enabledGroupIds by remember(visible) {
+        mutableStateOf(
+            topLevelItems.filter { it.isGroup && (it.group?.enabled == true) }.map { it.id }.toSet()
+        )
+    }
+    var enabledOrphanIds by remember(visible) {
+        mutableStateOf(
+            topLevelItems.filter { !it.isGroup && (it.orphan?.disabled == false) }.map { it.id }.toSet()
+        )
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -70,26 +80,20 @@ fun RegexPickerSheet(
                 .fillMaxHeight(0.6f)
                 .padding(horizontal = 16.dp),
         ) {
+            // 标题行 + 应用按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Box(modifier = Modifier.weight(1f)) {
-                    NutTavernSheetTitle(title = "我的正则")
-                }
-                IconButton(
-                    onClick = {
-                        onDismiss()
-                        onCreateRegex()
-                    },
-                ) {
-                    Icon(Lucide.Plus, contentDescription = "新建正则")
+                NutTavernSheetTitle(title = "正则", modifier = Modifier.weight(1f))
+                TextButton(onClick = { onApply(enabledGroupIds, enabledOrphanIds) }) {
+                    Text("应用")
                 }
             }
 
             if (topLevelItems.isEmpty()) {
                 Text(
-                    text = "还没有规则,点 + 新建",
+                    text = "暂无正则规则",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 24.dp),
@@ -100,49 +104,36 @@ fun RegexPickerSheet(
                         .fillMaxWidth()
                         .weight(1f),
                     contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(topLevelItems, key = { it.id }) { item ->
-                        if (item.isGroup) {
-                            val group = item.group ?: return@items
-                            NutTavernEntityCard(
-                                title = group.name,
-                                titleFallback = "未命名规则组",
-                                subtitle = if (group.scripts.isEmpty()) "暂无规则"
-                                else "共 ${group.scripts.size} 条规则",
-                                onClick = null,
-                                leading = {
-                                    PickerLeadingIcon(icon = Lucide.FolderOpen)
-                                },
-                                trailing = {
-                                    NutTavernEntitySwitch(
-                                        checked = group.enabled,
-                                        onCheckedChange = {
-                                            viewModel.toggleGroupEnabled(group.id, it)
-                                        },
-                                    )
-                                },
-                            )
+                        val isGroup = item.isGroup
+                        val enabled = if (isGroup) item.id in enabledGroupIds else item.id in enabledOrphanIds
+                        val title = if (isGroup) {
+                            item.group?.name?.ifBlank { "未命名规则组" } ?: "未命名规则组"
                         } else {
-                            val script = item.orphan ?: return@items
-                            NutTavernEntityCard(
-                                title = script.scriptName,
-                                titleFallback = "未命名规则",
-                                subtitle = regexScriptSubtitle(script),
-                                onClick = null,
-                                leading = {
-                                    PickerLeadingIcon(icon = Lucide.Regex)
-                                },
-                                trailing = {
-                                    NutTavernEntitySwitch(
-                                        checked = !script.disabled,
-                                        onCheckedChange = { enabled ->
-                                            viewModel.toggleOrphanEnabled(script.id, !enabled)
-                                        },
-                                    )
-                                },
-                            )
+                            item.orphan?.scriptName?.ifBlank { "未命名规则" } ?: "未命名规则"
                         }
+                        val subtitle = if (isGroup) {
+                            val count = item.group?.scripts?.size ?: 0
+                            if (count == 0) "空规则组" else "共 $count 条规则"
+                        } else null
+
+                        MultiSelectPickerCard(
+                            title = title,
+                            subtitle = subtitle,
+                            enabled = enabled,
+                            onToggle = { newEnabled ->
+                                if (isGroup) {
+                                    enabledGroupIds = if (newEnabled) enabledGroupIds + item.id
+                                    else enabledGroupIds - item.id
+                                } else {
+                                    enabledOrphanIds = if (newEnabled) enabledOrphanIds + item.id
+                                    else enabledOrphanIds - item.id
+                                }
+                            },
+                            onEdit = { onEdit(item.id, isGroup) },
+                        )
                     }
                 }
             }
@@ -150,23 +141,53 @@ fun RegexPickerSheet(
     }
 }
 
-/**
- * 抽屉卡 leading 静态语义图标。32dp 框 + 18dp 图标,与设置页 leading 按钮触区视觉对齐
- * (抽屉内部不提供"进组 / 编辑"动作,所以这里是只读图标,没有 onClick)。
- */
 @Composable
-private fun PickerLeadingIcon(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+internal fun MultiSelectPickerCard(
+    title: String,
+    subtitle: String?,
+    enabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    onEdit: () -> Unit,
 ) {
-    Box(
-        modifier = Modifier.size(32.dp),
-        contentAlignment = Alignment.Center,
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            modifier = Modifier.size(18.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 16.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            IconButton(onClick = onEdit) {
+                Icon(
+                    imageVector = Lucide.Pencil,
+                    contentDescription = "编辑",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Switch(checked = enabled, onCheckedChange = onToggle)
+        }
     }
 }

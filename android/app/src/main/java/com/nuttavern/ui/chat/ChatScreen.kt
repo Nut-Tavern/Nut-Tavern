@@ -50,7 +50,7 @@ fun ChatScreen(
     onNavigateToCharacterDetail: (characterId: String) -> Unit = {},
     onNavigateToPresetDetail: (presetId: String) -> Unit = {},
     onNavigateToRegexDetail: (regexId: String) -> Unit = {},
-    onNavigateToLorebookList: () -> Unit = {},
+    onNavigateToLorebookDetail: (lorebookId: String) -> Unit = {},
     viewModel: ChatViewModel = hiltViewModel(),
 ) {
     val messages by viewModel.currentMessages.collectAsState()
@@ -97,6 +97,7 @@ fun ChatScreen(
     var showPersonaPicker by remember { mutableStateOf(false) }
     var showPresetPicker by remember { mutableStateOf(false) }
     var showRegexPicker by remember { mutableStateOf(false) }
+    var showLorebookPicker by remember { mutableStateOf(false) }
     var editContent by remember { mutableStateOf("") }
 
     val shouldShowStreaming = streamingConversationId == currentId &&
@@ -188,25 +189,13 @@ fun ChatScreen(
                             onOpenUnavailableFeature = { featureName ->
                                 pendingSidebarFeatureNotice = featureName
                             },
-                            onOpenPersonaPicker = {
-                                coroutineScope.launch { settingsDrawerState.close() }
-                                showPersonaPicker = true
-                            },
-                            onOpenPresetPicker = {
-                                coroutineScope.launch { settingsDrawerState.close() }
-                                showPresetPicker = true
-                            },
-                            onOpenRegexPicker = {
-                                coroutineScope.launch { settingsDrawerState.close() }
-                                showRegexPicker = true
-                            },
+                            onOpenPersonaPicker = { showPersonaPicker = true },
+                            onOpenPresetPicker = { showPresetPicker = true },
+                            onOpenRegexPicker = { showRegexPicker = true },
+                            onOpenLorebookPicker = { showLorebookPicker = true },
                             onNavigateToCharacterDetail = { characterId ->
                                 coroutineScope.launch { settingsDrawerState.close() }
                                 onNavigateToCharacterDetail(characterId)
-                            },
-                            onNavigateToLorebook = {
-                                coroutineScope.launch { settingsDrawerState.close() }
-                                onNavigateToLorebookList()
                             },
                             onDismiss = { coroutineScope.launch { settingsDrawerState.close() } },
                         )
@@ -271,11 +260,13 @@ fun ChatScreen(
     com.nuttavern.ui.persona.PersonaPickerSheet(
         visible = showPersonaPicker,
         currentPersonaId = currentPersonaId,
-        onSelectPersona = { personaId ->
+        onApply = { personaId ->
             viewModel.selectPersonaForCurrentConversation(personaId)
-        },
-        onOpenPersonaDetail = { personaId ->
             showPersonaPicker = false
+        },
+        onEdit = { personaId ->
+            showPersonaPicker = false
+            coroutineScope.launch { settingsDrawerState.close() }
             onNavigateToPersonaDetail(personaId)
         },
         onDismiss = { showPersonaPicker = false },
@@ -284,11 +275,13 @@ fun ChatScreen(
     com.nuttavern.ui.preset.PresetPickerSheet(
         visible = showPresetPicker,
         currentPresetId = currentPresetId,
-        onSelectPreset = { presetId ->
+        onApply = { presetId ->
             viewModel.selectPresetForCurrentConversation(presetId)
-        },
-        onOpenPresetDetail = { presetId ->
             showPresetPicker = false
+        },
+        onEdit = { presetId ->
+            showPresetPicker = false
+            coroutineScope.launch { settingsDrawerState.close() }
             onNavigateToPresetDetail(presetId)
         },
         onDismiss = { showPresetPicker = false },
@@ -296,15 +289,30 @@ fun ChatScreen(
 
     com.nuttavern.ui.regex.RegexPickerSheet(
         visible = showRegexPicker,
-        onCreateRegex = {
+        onApply = { enabledGroupIds, enabledOrphanIds ->
+            viewModel.updateRegexSelection(enabledGroupIds, enabledOrphanIds)
             showRegexPicker = false
-            onNavigateToRegexDetail(com.nuttavern.ui.regex.NEW_REGEX_PLACEHOLDER_ID)
         },
-        onOpenRegexDetail = { regexId ->
+        onEdit = { id, isGroup ->
             showRegexPicker = false
-            onNavigateToRegexDetail(regexId)
+            coroutineScope.launch { settingsDrawerState.close() }
+            onNavigateToRegexDetail(id)
         },
         onDismiss = { showRegexPicker = false },
+    )
+
+    com.nuttavern.ui.lorebook.LorebookPickerSheet(
+        visible = showLorebookPicker,
+        onApply = { selectedIds ->
+            viewModel.updateLorebookSelection(selectedIds)
+            showLorebookPicker = false
+        },
+        onEdit = { lorebookId ->
+            showLorebookPicker = false
+            coroutineScope.launch { settingsDrawerState.close() }
+            onNavigateToLorebookDetail(lorebookId)
+        },
+        onDismiss = { showLorebookPicker = false },
     )
 
     RegenerateMessageDialog(

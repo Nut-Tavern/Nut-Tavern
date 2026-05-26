@@ -700,6 +700,20 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /** 批量更新正则启用状态(Picker Sheet "应用"时调用)。 */
+    fun updateRegexSelection(enabledGroupIds: Set<String>, enabledOrphanIds: Set<String>) {
+        viewModelScope.launch {
+            regexScriptRepository.applyEnabledState(enabledGroupIds, enabledOrphanIds)
+        }
+    }
+
+    /** 批量更新世界书全局选中状态(Picker Sheet "应用"时调用)。 */
+    fun updateLorebookSelection(selectedIds: Set<String>) {
+        viewModelScope.launch {
+            lorebookRepository.setGlobalSelected(selectedIds.toList())
+        }
+    }
+
     fun selectAssistant(id: String) {
         viewModelScope.launch {
             assistantRepository.setDefaultAssistant(id)
