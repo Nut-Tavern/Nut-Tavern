@@ -435,7 +435,8 @@ fun LorebookEntryEditScreen(
                 TextButton(onClick = {
                     showDeleteDialog = false
                     viewModel.deleteEntry(lorebookId, entryUid, currentBook.entries)
-                    onBack()
+                    // 不显式调用 onBack():删除后 entries 更新触发 recomposition,
+                    // 行 81 的守卫 find==null 会自动调用 onBack(),避免双重 popBackStack。
                 }) { Text("删除", color = MaterialTheme.colorScheme.error) }
             },
             dismissButton = {
