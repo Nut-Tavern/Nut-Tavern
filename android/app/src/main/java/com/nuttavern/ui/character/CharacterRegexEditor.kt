@@ -172,43 +172,18 @@ private fun CharacterRegexRow(
     onClick: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
 ) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = MaterialTheme.shapes.large,
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        contentColor = MaterialTheme.colorScheme.onSurface,
+    com.nuttavern.ui.components.NutTavernEntityCard(
+        title = script.scriptName,
+        titleFallback = "未命名规则",
+        subtitle = script.findRegex.takeIf { it.isNotBlank() },
         onClick = onClick,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = script.scriptName.ifBlank { "未命名规则" },
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (script.findRegex.isNotBlank()) {
-                    Text(
-                        text = script.findRegex,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-            }
-            Switch(
+        trailing = {
+            com.nuttavern.ui.components.NutTavernEntitySwitch(
                 checked = !script.disabled,
                 onCheckedChange = onToggleEnabled,
             )
-        }
-    }
+        },
+    )
 }
 
 /**
