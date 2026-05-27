@@ -368,13 +368,6 @@ private fun EntriesTab(
                     onClick = { onDuplicateEntry(entry.uid) },
                 ),
                 com.nuttavern.ui.components.EntityAction(
-                    icon = Lucide.FileUp,
-                    title = "导出",
-                    onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
-                    },
-                ),
-                com.nuttavern.ui.components.EntityAction(
                     icon = Lucide.Trash2,
                     title = "删除",
                     destructive = true,
