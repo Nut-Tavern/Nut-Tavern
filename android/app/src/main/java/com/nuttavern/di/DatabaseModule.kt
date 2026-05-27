@@ -32,6 +32,7 @@ object DatabaseModule {
                 NutTavernDatabase.MIGRATION_7_8,
                 NutTavernDatabase.MIGRATION_8_9,
                 NutTavernDatabase.MIGRATION_9_10,
+                NutTavernDatabase.MIGRATION_10_11,
             )
             .build()
     }

@@ -27,6 +27,8 @@ data class CharacterEntity(
     @ColumnInfo(defaultValue = "") val verbosity: String,
     @ColumnInfo(defaultValue = "0") val createdAt: Long,
     @ColumnInfo(defaultValue = "0") val updatedAt: Long,
+    /** JSON 序列化的 List<String>,绑定的全局世界书 id。 */
+    @ColumnInfo(defaultValue = "[]") val lorebookIdsJson: String,
     /**
      * 用户拖动排序后的位置。新卡追加到末尾(取当前 max + 步长),
      * 已有卡迁移时按 createdAt 兜底。reorder 时按 100 步长重写一遍,

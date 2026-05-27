@@ -105,6 +105,8 @@ class CharacterRepository @Inject constructor(
             regexScripts = regexScriptsJson.takeIf { it.isNotBlank() }?.let { json.decodeFromString<List<RegexScript>>(it) }
                 ?: emptyList(),
             avatarPath = avatarPath,
+            lorebookIds = lorebookIdsJson.takeIf { it.isNotBlank() }?.let { json.decodeFromString<List<String>>(it) }
+                ?: emptyList(),
             verbosity = verbosity,
             createdAt = createdAt,
             updatedAt = updatedAt,
@@ -131,6 +133,7 @@ class CharacterRepository @Inject constructor(
             characterBookJson = characterBook?.let { json.encodeToString(it) },
             regexScriptsJson = json.encodeToString(regexScripts),
             avatarPath = avatarPath,
+            lorebookIdsJson = json.encodeToString(lorebookIds),
             verbosity = verbosity,
             createdAt = createdAt,
             updatedAt = updatedAt,

@@ -44,6 +44,8 @@ data class Character(
     @SerialName("character_book") val characterBook: CharacterBook? = null,
     @SerialName("regex_scripts") val regexScripts: List<RegexScript> = emptyList(),
     val avatarPath: String? = null,
+    /** 绑定的全局世界书 id 列表。对话时这些世界书自动参与激活(除全局选中外)。 */
+    val lorebookIds: List<String> = emptyList(),
     /**
      * 回复长度档位。对齐酒馆 verbosity_levels(auto / low / medium / high)。
      * 空字符串 = auto = 不发送字段。允许传自定义字符串(如 minimal / max),由 ChatApiClient

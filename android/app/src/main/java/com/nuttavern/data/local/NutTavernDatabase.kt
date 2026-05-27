@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 10,
+    version = 11,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -190,6 +190,14 @@ abstract class NutTavernDatabase : RoomDatabase() {
                     """.trimIndent()
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `messages` (`conversationId`)")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("characters", "lorebookIdsJson")) {
+                    db.execSQL("ALTER TABLE `characters` ADD COLUMN `lorebookIdsJson` TEXT NOT NULL DEFAULT '[]'")
+                }
             }
         }
 

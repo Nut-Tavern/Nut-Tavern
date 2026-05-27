@@ -8,11 +8,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
@@ -156,6 +158,7 @@ private fun CharacterEditScreenContent(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var fullScreenField by remember { mutableStateOf<CharacterTextField?>(null) }
     var showRegexEditor by remember { mutableStateOf(false) }
+    var showLorebookBindSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingNotice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pendingNotice) {
@@ -338,9 +341,10 @@ private fun CharacterEditScreenContent(
                             NutTavernIconRow(
                                 icon = Lucide.BookOpenText,
                                 title = "角色世界书",
-                                subtitle = "当前已存盘,编辑器后续接入",
+                                subtitle = if (draft.lorebookIds.isEmpty()) "未绑定"
+                                    else "已绑定 ${draft.lorebookIds.size} 本",
                                 showTrailingChevron = true,
-                                onClick = { pendingNotice = "角色世界书编辑" },
+                                onClick = { showLorebookBindSheet = true },
                             )
                             NutTavernGroupDivider()
                             NutTavernIconRow(
@@ -443,6 +447,17 @@ private fun CharacterEditScreenContent(
             scripts = draft.regexScripts,
             onChange = { next -> draft = draft.copy(regexScripts = next) },
             onBack = { showRegexEditor = false },
+        )
+    }
+
+    if (showLorebookBindSheet) {
+        CharacterLorebookBindSheet(
+            boundIds = draft.lorebookIds.toSet(),
+            onApply = { ids ->
+                draft = draft.copy(lorebookIds = ids.toList())
+                showLorebookBindSheet = false
+            },
+            onDismiss = { showLorebookBindSheet = false },
         )
     }
 }
@@ -733,5 +748,50 @@ private fun VerbosityRow(
                 TextButton(onClick = { showCustomDialog = false }) { Text("取消") }
             },
         )
+    }
+}
+
+/**
+ * 角色绑定世界书选择 Sheet。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CharacterLorebookBindSheet(
+    boundIds: Set<String>,
+    onApply: (Set<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val lorebookViewModel: com.nuttavern.ui.viewmodel.LorebookViewModel = hiltViewModel()
+    val lorebooks by lorebookViewModel.lorebooks.collectAsState()
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    var selectedIds by remember { mutableStateOf(boundIds) }
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f).padding(horizontal = 16.dp),
+        ) {
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                com.nuttavern.ui.components.NutTavernSheetTitle(title = "绑定世界书", modifier = Modifier.weight(1f))
+                TextButton(onClick = { onApply(selectedIds) }) { Text("应用") }
+            }
+            if (lorebooks.isEmpty()) {
+                Text("暂无世界书,请先在设置中创建", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
+            } else {
+                LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(lorebooks, key = { it.id }) { book ->
+                        com.nuttavern.ui.regex.MultiSelectPickerCard(
+                            title = book.name.ifBlank { "未命名世界书" },
+                            subtitle = if (book.entries.isEmpty()) "暂无条目" else "共 ${book.entries.size} 个条目",
+                            enabled = book.id in selectedIds,
+                            onToggle = { enabled -> selectedIds = if (enabled) selectedIds + book.id else selectedIds - book.id },
+                            onEdit = {},
+                        )
+                    }
+                }
+            }
+        }
     }
 }

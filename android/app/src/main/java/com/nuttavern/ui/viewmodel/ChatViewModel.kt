@@ -1473,8 +1473,18 @@ class ChatViewModel @Inject constructor(
             if (characterBook != null) {
                 add(com.nuttavern.lorebook.TaggedLorebook(book = characterBook, isCharacterSource = true))
             }
+            // 角色绑定的全局世界书(isCharacterSource = true)
+            val characterBoundIds = character?.lorebookIds.orEmpty().toSet()
+            for (book in allBooks) {
+                if (book.id in characterBoundIds) {
+                    add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = true))
+                }
+            }
+            // 全局选中的世界书(排除已作为角色绑定加入的)
             for (book in selectedBooks) {
-                add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = false))
+                if (book.id !in characterBoundIds) {
+                    add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = false))
+                }
             }
         }
         if (taggedLorebooks.isEmpty()) return null
