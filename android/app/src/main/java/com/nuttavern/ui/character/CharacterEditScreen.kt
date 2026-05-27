@@ -159,6 +159,7 @@ private fun CharacterEditScreenContent(
     var fullScreenField by remember { mutableStateOf<CharacterTextField?>(null) }
     var showRegexEditor by remember { mutableStateOf(false) }
     var showLorebookBindSheet by remember { mutableStateOf(false) }
+    var showCharacterBookEditor by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingNotice by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(pendingNotice) {
@@ -348,6 +349,14 @@ private fun CharacterEditScreenContent(
                             )
                             NutTavernGroupDivider()
                             NutTavernIconRow(
+                                icon = Lucide.BookOpenText,
+                                title = "角色内嵌世界书",
+                                subtitle = characterBookSubtitle(draft.characterBook),
+                                showTrailingChevron = true,
+                                onClick = { showCharacterBookEditor = true },
+                            )
+                            NutTavernGroupDivider()
+                            NutTavernIconRow(
                                 icon = Lucide.Regex,
                                 title = "角色专属正则",
                                 subtitle = regexEntrySubtitle(draft.regexScripts),
@@ -447,6 +456,14 @@ private fun CharacterEditScreenContent(
             scripts = draft.regexScripts,
             onChange = { next -> draft = draft.copy(regexScripts = next) },
             onBack = { showRegexEditor = false },
+        )
+    }
+
+    if (showCharacterBookEditor) {
+        CharacterLorebookEditor(
+            characterBook = draft.characterBook,
+            onChange = { next -> draft = draft.copy(characterBook = next) },
+            onBack = { showCharacterBookEditor = false },
         )
     }
 
@@ -752,6 +769,15 @@ private fun VerbosityRow(
 }
 
 /**
+ * "角色内嵌世界书"行的 subtitle 文案。
+ */
+private fun characterBookSubtitle(book: com.nuttavern.data.character.CharacterBook?): String {
+    if (book == null || book.entries.isEmpty()) return "尚未添加,点击新增"
+    val enabled = book.entries.count { it.enabled }
+    return "共 ${book.entries.size} 条,启用 $enabled 条"
+}
+
+/**
  * 角色绑定世界书选择 Sheet。
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -787,7 +813,6 @@ private fun CharacterLorebookBindSheet(
                             subtitle = if (book.entries.isEmpty()) "暂无条目" else "共 ${book.entries.size} 个条目",
                             enabled = book.id in selectedIds,
                             onToggle = { enabled -> selectedIds = if (enabled) selectedIds + book.id else selectedIds - book.id },
-                            onEdit = {},
                         )
                     }
                 }

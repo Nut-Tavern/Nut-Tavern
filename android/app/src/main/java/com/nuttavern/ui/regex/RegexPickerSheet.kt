@@ -147,7 +147,7 @@ internal fun MultiSelectPickerCard(
     subtitle: String?,
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
-    onEdit: () -> Unit,
+    onEdit: (() -> Unit)? = null,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -179,13 +179,15 @@ internal fun MultiSelectPickerCard(
                     )
                 }
             }
-            IconButton(onClick = onEdit) {
-                Icon(
-                    imageVector = Lucide.Pencil,
-                    contentDescription = "编辑",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (onEdit != null) {
+                IconButton(onClick = onEdit) {
+                    Icon(
+                        imageVector = Lucide.Pencil,
+                        contentDescription = "编辑",
+                        modifier = Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             Switch(checked = enabled, onCheckedChange = onToggle)
         }
