@@ -96,6 +96,10 @@ class RegexScriptViewModel @Inject constructor(
         viewModelScope.launch { repository.deleteScriptFromGroup(groupId, scriptId) }
     }
 
+    fun duplicateScriptInGroup(groupId: String, scriptId: String) {
+        viewModelScope.launch { repository.duplicateScriptInGroup(groupId, scriptId) }
+    }
+
     fun reorderScriptsInGroup(groupId: String, orderedIds: List<String>) {
         viewModelScope.launch { repository.reorderScriptsInGroup(groupId, orderedIds) }
     }

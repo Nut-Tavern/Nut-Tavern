@@ -149,6 +149,24 @@ class RegexScriptRepository @Inject constructor(
         }
     }
 
+    suspend fun duplicateScriptInGroup(groupId: String, scriptId: String) {
+        dataStore.mutate { s ->
+            s.copy(
+                groups = s.groups.map { g ->
+                    if (g.id != groupId) return@map g
+                    val source = g.scripts.firstOrNull { it.id == scriptId } ?: return@map g
+                    val copy = source.copy(
+                        id = java.util.UUID.randomUUID().toString(),
+                        scriptName = source.scriptName + "*",
+                    )
+                    val insertIndex = g.scripts.indexOfFirst { it.id == scriptId } + 1
+                    val newScripts = g.scripts.toMutableList().apply { add(insertIndex, copy) }
+                    g.copy(scripts = newScripts)
+                },
+            )
+        }
+    }
+
     suspend fun reorderScriptsInGroup(groupId: String, orderedIds: List<String>) {
         dataStore.mutate { s ->
             s.copy(

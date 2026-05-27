@@ -513,7 +513,9 @@ fun NutTavernEntityActionsSheet(
     actions: List<EntityAction>,
     onDismiss: () -> Unit,
 ) {
-    val sheetState = androidx.compose.material3.rememberModalBottomSheetState()
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+    )
     val scope = androidx.compose.runtime.rememberCoroutineScope()
 
     androidx.compose.material3.ModalBottomSheet(

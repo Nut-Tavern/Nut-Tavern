@@ -41,10 +41,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.EllipsisVertical
 import com.composables.icons.lucide.Plus
+import com.composables.icons.lucide.Trash2
 import com.nuttavern.data.regex.RegexGroup
 import com.nuttavern.data.regex.RegexScript
 import com.nuttavern.ui.viewmodel.RegexScriptViewModel
@@ -128,10 +131,11 @@ fun RegexGroupScreen(
             onBack()
         },
         onAddScript = {
-            // 走占位 id,在编辑页保存才落库;避免"添加按钮 → 列表残留空规则"。
             onOpenScriptDetail(groupId, NEW_REGEX_PLACEHOLDER_ID)
         },
         onReorder = { orderedIds -> viewModel.reorderScriptsInGroup(groupId, orderedIds) },
+        onDuplicateScript = { scriptId -> viewModel.duplicateScriptInGroup(groupId, scriptId) },
+        onDeleteScript = { scriptId -> viewModel.deleteScriptFromGroup(groupId, scriptId) },
     )
 }
 
@@ -201,6 +205,8 @@ private fun RegexGroupContent(
     onDeleteGroup: () -> Unit,
     onAddScript: () -> Unit,
     onReorder: (List<String>) -> Unit,
+    onDuplicateScript: (scriptId: String) -> Unit,
+    onDeleteScript: (scriptId: String) -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -282,6 +288,8 @@ private fun RegexGroupContent(
                 contentPadding = padding,
                 onScriptClick = onOpenScriptDetail,
                 onCommitOrder = onReorder,
+                onDuplicateScript = onDuplicateScript,
+                onDeleteScript = onDeleteScript,
             )
         }
     }
@@ -326,7 +334,12 @@ private fun GroupScriptList(
     contentPadding: PaddingValues,
     onScriptClick: (scriptId: String) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
+    onDuplicateScript: (scriptId: String) -> Unit,
+    onDeleteScript: (scriptId: String) -> Unit,
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    var longPressScript by remember { mutableStateOf<RegexScript?>(null) }
+
     var localOrder by remember { mutableStateOf(scripts) }
     LaunchedEffect(scripts) {
         val localIds = localOrder.map { it.id }.toSet()
@@ -361,6 +374,7 @@ private fun GroupScriptList(
                     subtitle = regexScriptSubtitle(script),
                     elevated = isDragging,
                     onClick = { onScriptClick(script.id) },
+                    onLongClick = { longPressScript = script },
                     trailing = {
                         com.nuttavern.ui.components.NutTavernEntityDragHandle(
                             modifier = Modifier
@@ -374,6 +388,44 @@ private fun GroupScriptList(
                 )
             }
         }
+        item(key = "hint") {
+            Text(
+                text = "长按卡片进行更多操作",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            )
+        }
+    }
+
+    // 长按菜单
+    if (longPressScript != null) {
+        val script = longPressScript!!
+        com.nuttavern.ui.components.NutTavernEntityActionsSheet(
+            title = script.scriptName.ifBlank { "未命名规则" },
+            actions = listOf(
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Copy,
+                    title = "复制",
+                    onClick = { onDuplicateScript(script.id) },
+                ),
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FileUp,
+                    title = "导出",
+                    onClick = {
+                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                    },
+                ),
+                com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.Trash2,
+                    title = "删除",
+                    destructive = true,
+                    onClick = { onDeleteScript(script.id) },
+                ),
+            ),
+            onDismiss = { longPressScript = null },
+        )
     }
 }
 
