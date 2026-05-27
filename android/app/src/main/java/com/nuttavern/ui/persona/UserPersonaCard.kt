@@ -19,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -55,17 +56,27 @@ internal fun UserPersonaCard(
     isCurrent: Boolean = false,
     dragHandle: (@Composable () -> Unit)? = null,
 ) {
+    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
+    val surfaceModifier = modifier
+        .fillMaxWidth()
+        .clip(MaterialTheme.shapes.large)
+        .combinedClickable(
+            onClick = onClick,
+            onLongClick = onLongClick?.let { callback ->
+                {
+                    haptics.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    callback()
+                }
+            },
+        )
+
     Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .let { m -> if (onLongClick != null) m.combinedClickable(onClick = onClick, onLongClick = onLongClick) else m },
+        modifier = surfaceModifier,
         shape = MaterialTheme.shapes.large,
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = if (elevated) 6.dp else 0.dp,
         shadowElevation = if (elevated) 6.dp else 0.dp,
-        onClick = if (onLongClick == null) onClick else { {} },
-        enabled = enabled,
     ) {
         Row(
             modifier = Modifier
