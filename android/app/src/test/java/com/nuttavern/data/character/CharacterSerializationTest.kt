@@ -75,6 +75,35 @@ class CharacterSerializationTest {
         assertEquals(emptyList<RegexScript>(), decodedCharacter.regexScripts)
     }
 
+    @Test
+    fun characterBookDelayUntilRecursionAcceptsBooleanAndNumber() {
+        val booleanEntry = json.decodeFromString<CharacterBookEntry>("""
+            {
+                "keys": ["alpha"],
+                "content": "Boolean recursion",
+                "delayUntilRecursion": true
+            }
+        """.trimIndent())
+        val numericEntry = json.decodeFromString<CharacterBookEntry>("""
+            {
+                "keys": ["beta"],
+                "content": "Numeric recursion",
+                "delayUntilRecursion": 2
+            }
+        """.trimIndent())
+        val falseEntry = json.decodeFromString<CharacterBookEntry>("""
+            {
+                "keys": ["gamma"],
+                "content": "No recursion delay",
+                "delayUntilRecursion": false
+            }
+        """.trimIndent())
+
+        assertEquals(1, booleanEntry.delayUntilRecursion)
+        assertEquals(2, numericEntry.delayUntilRecursion)
+        assertEquals(0, falseEntry.delayUntilRecursion)
+    }
+
     private companion object {
         val json = Json {
             ignoreUnknownKeys = true

@@ -45,11 +45,15 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 import java.util.UUID
 import javax.inject.Inject
 import dagger.hilt.android.lifecycle.HiltViewModel
 
 private const val MAX_CONVERSATION_TITLE_LENGTH = 80
+private val lorebookTimedEffectJson = Json { ignoreUnknownKeys = true }
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -493,6 +497,7 @@ class ChatViewModel @Inject constructor(
                     model = model,
                     pendingUserMessage = null,
                 )
+                persistLorebookTimedEffects(conversationId, prepared.lorebookTimedEffectsJson)
 
                 _streamingConversationId.value = conversationId
                 _streamingContent.value = ""
@@ -1309,6 +1314,7 @@ class ChatViewModel @Inject constructor(
             model = model,
             pendingUserMessage = null,
         )
+        persistLorebookTimedEffects(conversationId, prepared.lorebookTimedEffectsJson)
 
         _streamingConversationId.value = conversationId
         _streamingContent.value = ""
@@ -1394,7 +1400,7 @@ class ChatViewModel @Inject constructor(
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         // 世界书激活:合并全局选中 + 角色内嵌世界书
-        val lorebookResult = runLorebookActivation(history, character, preset, persona)
+        val lorebookResult = runLorebookActivation(conversation, history, character, preset, persona)
 
         return PromptComposerInput(
             userMessage = userMessage,
@@ -1413,6 +1419,7 @@ class ChatViewModel @Inject constructor(
      * 执行世界书激活扫描。合并全局选中的世界书 + 角色内嵌世界书。
      */
     private suspend fun runLorebookActivation(
+        conversation: ConversationSummary?,
         history: List<HistoryMessage>,
         character: com.nuttavern.data.character.Character?,
         preset: com.nuttavern.data.preset.Preset,
@@ -1453,8 +1460,15 @@ class ChatViewModel @Inject constructor(
                         entryMatchWholeWords = entry.matchWholeWords,
                         probability = entry.probability ?: 100,
                         useProbability = entry.useProbability ?: true,
+                        sticky = entry.sticky,
+                        cooldown = entry.cooldown,
+                        delay = entry.delay,
                         excludeRecursion = entry.excludeRecursion ?: false,
                         preventRecursion = entry.preventRecursion ?: false,
+                        delayUntilRecursion = entry.delayUntilRecursion ?: 0,
+                        ignoreBudget = entry.ignoreBudget ?: false,
+                        addMemo = entry.addMemo ?: false,
+                        entryUseGroupScoring = entry.useGroupScoring,
                         matchPersonaDescription = entry.matchPersonaDescription ?: false,
                         matchCharacterDescription = entry.matchCharacterDescription ?: false,
                         matchCharacterPersonality = entry.matchCharacterPersonality ?: false,
@@ -1471,23 +1485,45 @@ class ChatViewModel @Inject constructor(
 
         val taggedLorebooks = buildList {
             if (characterBook != null) {
-                add(com.nuttavern.lorebook.TaggedLorebook(book = characterBook, isCharacterSource = true))
+                add(
+                    com.nuttavern.lorebook.TaggedLorebook(
+                        book = characterBook,
+                        isCharacterSource = true,
+                        sourceKey = "character:${character?.id.orEmpty()}:embedded",
+                    )
+                )
             }
             // 角色绑定的全局世界书(isCharacterSource = true)
             val characterBoundIds = character?.lorebookIds.orEmpty().toSet()
             for (book in allBooks) {
                 if (book.id in characterBoundIds) {
-                    add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = true))
+                    add(
+                        com.nuttavern.lorebook.TaggedLorebook(
+                            book = book,
+                            isCharacterSource = true,
+                            sourceKey = book.id,
+                        )
+                    )
                 }
             }
             // 全局选中的世界书(排除已作为角色绑定加入的)
             for (book in selectedBooks) {
                 if (book.id !in characterBoundIds) {
-                    add(com.nuttavern.lorebook.TaggedLorebook(book = book, isCharacterSource = false))
+                    add(
+                        com.nuttavern.lorebook.TaggedLorebook(
+                            book = book,
+                            isCharacterSource = false,
+                            sourceKey = book.id,
+                        )
+                    )
                 }
             }
         }
-        if (taggedLorebooks.isEmpty()) return null
+        if (taggedLorebooks.isEmpty()) {
+            return com.nuttavern.lorebook.LorebookEngine.ActivationResult(
+                nextTimedEffects = com.nuttavern.lorebook.LorebookTimedEffectState.Empty,
+            )
+        }
 
         val messages = history.map { it.content }.reversed()
         val userName = persona?.name?.takeIf { it.isNotBlank() } ?: "User"
@@ -1517,7 +1553,49 @@ class ChatViewModel @Inject constructor(
             lorebooks = taggedLorebooks,
             wiFormat = preset.wiFormat,
             scanContext = scanContext,
+            messageCount = history.size,
+            timedEffects = decodeLorebookTimedEffects(conversation?.lorebookTimedEffectsJson),
         )
+    }
+
+    private suspend fun persistLorebookTimedEffects(conversationId: String, timedEffectsJson: String?) {
+        if (timedEffectsJson == null) return
+
+        conversationRepository.updateLorebookTimedEffects(conversationId, timedEffectsJson)
+        updateConversationTimedEffects(_conversationList, conversationId, timedEffectsJson)
+        updateConversationTimedEffects(_nonArchivedConversations, conversationId, timedEffectsJson)
+        updateConversationTimedEffects(_allConversations, conversationId, timedEffectsJson)
+    }
+
+    private fun updateConversationTimedEffects(
+        state: MutableStateFlow<List<ConversationSummary>>,
+        conversationId: String,
+        timedEffectsJson: String,
+    ) {
+        state.update { conversations ->
+            conversations.map { conversation ->
+                if (conversation.id == conversationId) {
+                    conversation.copy(lorebookTimedEffectsJson = timedEffectsJson)
+                } else {
+                    conversation
+                }
+            }
+        }
+    }
+
+    private fun decodeLorebookTimedEffects(timedEffectsJson: String?): com.nuttavern.lorebook.LorebookTimedEffectState {
+        if (timedEffectsJson.isNullOrBlank()) return com.nuttavern.lorebook.LorebookTimedEffectState.Empty
+        return runCatching {
+            lorebookTimedEffectJson.decodeFromString<com.nuttavern.lorebook.LorebookTimedEffectState>(timedEffectsJson)
+        }.getOrElse {
+            com.nuttavern.lorebook.LorebookTimedEffectState.Empty
+        }
+    }
+
+    private fun encodeLorebookTimedEffects(
+        timedEffects: com.nuttavern.lorebook.LorebookTimedEffectState,
+    ): String {
+        return lorebookTimedEffectJson.encodeToString(timedEffects)
     }
 
     /**
@@ -1583,6 +1661,7 @@ class ChatViewModel @Inject constructor(
             generationParams = composed.generationParams.copy(
                 customPostProcessing = customPostProcessing,
             ),
+            lorebookTimedEffectsJson = input.lorebookResult?.nextTimedEffects?.let(::encodeLorebookTimedEffects),
         )
     }
 
@@ -1590,6 +1669,7 @@ class ChatViewModel @Inject constructor(
         val systemPrompt: String,
         val messages: List<ChatMessage>,
         val generationParams: com.nuttavern.network.GenerationParams,
+        val lorebookTimedEffectsJson: String?,
     )
 
     private fun appendStreamingChunk(content: String, reasoningContent: String) {

@@ -73,6 +73,10 @@ class ConversationRepository @Inject constructor(
         conversationDao.update(conversation.toEntity(lastMessageTime))
     }
 
+    suspend fun updateLorebookTimedEffects(conversationId: String, timedEffectsJson: String) {
+        conversationDao.updateLorebookTimedEffects(conversationId, timedEffectsJson)
+    }
+
     suspend fun deleteConversation(id: String) {
         conversationDao.deleteById(id)
     }
@@ -161,6 +165,7 @@ class ConversationRepository @Inject constructor(
             presetId = presetId,
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
+            lorebookTimedEffectsJson = lorebookTimedEffectsJson,
         )
     }
 
@@ -178,6 +183,7 @@ class ConversationRepository @Inject constructor(
             presetId = presetId,
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
+            lorebookTimedEffectsJson = lorebookTimedEffectsJson,
         )
     }
 

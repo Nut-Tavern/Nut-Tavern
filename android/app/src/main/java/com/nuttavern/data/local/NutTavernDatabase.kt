@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 11,
+    version = 12,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -197,6 +197,14 @@ abstract class NutTavernDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 if (!db.hasColumn("characters", "lorebookIdsJson")) {
                     db.execSQL("ALTER TABLE `characters` ADD COLUMN `lorebookIdsJson` TEXT NOT NULL DEFAULT '[]'")
+                }
+            }
+        }
+
+        val MIGRATION_11_12 = object : Migration(11, 12) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("conversations", "lorebookTimedEffectsJson")) {
+                    db.execSQL("ALTER TABLE `conversations` ADD COLUMN `lorebookTimedEffectsJson` TEXT NOT NULL DEFAULT '{}'")
                 }
             }
         }

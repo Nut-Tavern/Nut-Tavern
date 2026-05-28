@@ -2,6 +2,17 @@ package com.nuttavern.data.character
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.ExperimentalSerializationApi
+import kotlinx.serialization.KSerializer
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.JsonObject
 
 /**
@@ -41,7 +52,8 @@ data class CharacterBookEntry(
     @SerialName("addMemo") val addMemo: Boolean? = null,
     @SerialName("excludeRecursion") val excludeRecursion: Boolean? = null,
     @SerialName("preventRecursion") val preventRecursion: Boolean? = null,
-    @SerialName("delayUntilRecursion") val delayUntilRecursion: Boolean? = null,
+    @Serializable(with = DelayUntilRecursionSerializer::class)
+    @SerialName("delayUntilRecursion") val delayUntilRecursion: Int? = null,
     val probability: Int? = null,
     @SerialName("useProbability") val useProbability: Boolean? = null,
     val depth: Int? = null,
@@ -57,6 +69,7 @@ data class CharacterBookEntry(
     @SerialName("sticky") val sticky: Int? = null,
     @SerialName("cooldown") val cooldown: Int? = null,
     @SerialName("delay") val delay: Int? = null,
+    @SerialName("ignoreBudget") val ignoreBudget: Boolean? = null,
     // ── 扫描范围扩展(match* 系列) ──
     @SerialName("matchPersonaDescription") val matchPersonaDescription: Boolean? = null,
     @SerialName("matchCharacterDescription") val matchCharacterDescription: Boolean? = null,
@@ -69,3 +82,29 @@ data class CharacterBookEntry(
     // ── 兼容性存盘 ──
     val vectorized: Boolean? = null,
 )
+
+object DelayUntilRecursionSerializer : KSerializer<Int?> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("DelayUntilRecursion", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): Int? {
+        val jsonDecoder = decoder as? JsonDecoder
+            ?: return decoder.decodeString().toIntOrNull()
+        val primitive = jsonDecoder.decodeJsonElement() as? JsonPrimitive ?: return null
+        primitive.intOrNull?.let { return it }
+        return when (primitive.booleanOrNull) {
+            true -> 1
+            false -> 0
+            null -> primitive.content.toIntOrNull()
+        }
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    override fun serialize(encoder: Encoder, value: Int?) {
+        if (value == null) {
+            encoder.encodeNull()
+        } else {
+            encoder.encodeInt(value)
+        }
+    }
+}

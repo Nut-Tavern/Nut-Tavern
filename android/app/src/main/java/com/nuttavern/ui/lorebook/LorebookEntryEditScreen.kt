@@ -293,6 +293,66 @@ fun LorebookEntryEditScreen(
                             onCheckedChange = { draft = draft.copy(useProbability = it) },
                         )
                         NutTavernGroupDivider()
+                        NutTavernNumericField(
+                            label = "Sticky",
+                            value = draft.sticky,
+                            onValueChange = { draft = draft.copy(sticky = it) },
+                            parser = NumericParser.IntParser,
+                            helperText = "激活后继续保持 N 条消息;留空表示不黏着",
+                            placeholder = "Non-sticky",
+                            min = 1,
+                            max = 10000,
+                            nullable = true,
+                        )
+                        NutTavernGroupDivider()
+                        NutTavernNumericField(
+                            label = "Cooldown",
+                            value = draft.cooldown,
+                            onValueChange = { draft = draft.copy(cooldown = it) },
+                            parser = NumericParser.IntParser,
+                            helperText = "激活后 N 条消息内不再触发;留空表示无冷却",
+                            placeholder = "No cooldown",
+                            min = 1,
+                            max = 10000,
+                            nullable = true,
+                        )
+                        NutTavernGroupDivider()
+                        NutTavernNumericField(
+                            label = "Delay",
+                            value = draft.delay,
+                            onValueChange = { draft = draft.copy(delay = it) },
+                            parser = NumericParser.IntParser,
+                            helperText = "会话消息数达到 N 后才允许激活;留空表示无延迟",
+                            placeholder = "No delay",
+                            min = 1,
+                            max = 10000,
+                            nullable = true,
+                        )
+                        NutTavernGroupDivider()
+                        SwitchRow(
+                            label = "Delay until recursion",
+                            subtitle = "仅在递归扫描阶段允许激活",
+                            checked = draft.delayUntilRecursion > 0,
+                            onCheckedChange = { enabled ->
+                                draft = draft.copy(delayUntilRecursion = if (enabled) 1 else 0)
+                            },
+                        )
+                        if (draft.delayUntilRecursion > 0) {
+                            NutTavernGroupDivider()
+                            NutTavernNumericField(
+                                label = "Recursion Level",
+                                value = draft.delayUntilRecursion,
+                                onValueChange = { value ->
+                                    draft = draft.copy(delayUntilRecursion = value ?: 1)
+                                },
+                                parser = NumericParser.IntParser,
+                                helperText = "第 N 层递归扫描开始允许激活",
+                                placeholder = "1",
+                                min = 1,
+                                max = 10000,
+                            )
+                        }
+                        NutTavernGroupDivider()
                         SwitchRow(
                             label = "忽略 Token 预算",
                             subtitle = "即使超出预算也强制注入",

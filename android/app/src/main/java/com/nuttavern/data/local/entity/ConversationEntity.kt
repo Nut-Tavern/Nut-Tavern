@@ -56,4 +56,5 @@ data class ConversationEntity(
      * 语义与 [enabledRegexGroupIds] 完全一致,只是对应散规则而非组。
      */
     @ColumnInfo(defaultValue = "NULL") val enabledOrphanRegexIds: String? = null,
+    @ColumnInfo(defaultValue = "'{}'") val lorebookTimedEffectsJson: String = "{}",
 )

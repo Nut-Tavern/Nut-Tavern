@@ -10,48 +10,28 @@ import com.nuttavern.data.lorebook.WiRole
 import com.nuttavern.prompt.TokenCounter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /**
- * 世界书激活引擎。对齐酒馆 `checkWorldInfo`(world-info.js:4500-5070)。
+ * 世界书激活引擎。对齐 SillyTavern `checkWorldInfo` 的核心运行语义。
  *
- * 职责:
- * 1. 接收聊天历史 + 全局/角色绑定/角色内嵌世界书
- * 2. 按 characterStrategy 合并排序条目来源
- * 3. characterFilter 硬过滤(按当前角色)
- * 4. 按关键词匹配 + match* 扩展扫描范围 + 激活逻辑筛选条目
- * 5. minActivations 扩展深度
- * 6. 互斥组处理(含 useGroupScoring 评分模式)
- * 7. Token 预算裁剪(budgetCap)
- * 8. 递归扫描
- * 9. 按注入位置分桶返回结果
- *
- * 当前不消费:vectorized(向量搜索)、automationId(slash command)、
- * characterFilter.tags(无 tag 系统)、sticky/cooldown/delay(时效效果)、
- * triggers(生成类型触发器)。这些字段存盘但引擎跳过。
+ * 当前不消费 vectorized、automationId(slash command)、characterFilter.tags、triggers。
  */
 @Singleton
 class LorebookEngine @Inject constructor(
     private val tokenCounter: TokenCounter,
 ) {
 
-    /**
-     * 激活结果。按注入位置分桶。
-     */
     data class ActivationResult(
-        /** position=before 的条目内容,已按 order 排序拼接 */
         val worldInfoBefore: String = "",
-        /** position=after 的条目内容 */
         val worldInfoAfter: String = "",
-        /** position=atDepth 的条目,按 (depth, role) 分组 */
         val depthEntries: List<DepthEntry> = emptyList(),
-        /** position=EMTop 的条目内容 */
         val exampleTop: String = "",
-        /** position=EMBottom 的条目内容 */
         val exampleBottom: String = "",
-        /** 所有被激活的条目(用于调试/日志) */
         val activatedEntries: List<LorebookEntry> = emptyList(),
-        /** 是否发生预算溢出(有条目匹配但因预算不足未注入) */
         val budgetOverflowed: Boolean = false,
+        val nextTimedEffects: LorebookTimedEffectState = LorebookTimedEffectState.Empty,
     )
 
     data class DepthEntry(
@@ -60,177 +40,103 @@ class LorebookEngine @Inject constructor(
         val content: String,
     )
 
-    /**
-     * 全局扫描上下文。由调用方(ChatViewModel)组装传入。
-     */
     data class ScanContext(
-        /** 当前对话角色的 id(用于 characterFilter 过滤) */
         val currentCharacterId: String? = null,
-        /** 用户身份描述(matchPersonaDescription 时追加到扫描文本) */
         val personaDescription: String = "",
-        /** 角色 description 字段 */
         val characterDescription: String = "",
-        /** 角色 personality 字段 */
         val characterPersonality: String = "",
-        /** 角色 depth prompt */
         val characterDepthPrompt: String = "",
-        /** 角色 scenario 字段 */
         val scenario: String = "",
-        /** 角色 creator_notes 字段 */
         val creatorNotes: String = "",
-        /** 预设的上下文窗口大小(用于计算百分比预算) */
         val maxContextTokens: Int = 4096,
     )
 
-    /**
-     * 执行世界书激活扫描。
-     *
-     * @param messages 聊天历史文本,index 0 = 最新消息(倒序)
-     * @param messageNames 每条消息的发言者名称(与 messages 一一对应)
-     * @param lorebooks 参与激活的所有世界书,按来源分:
-     *   - isCharacterSource=true 的是角色来源(角色内嵌 + 角色绑定)
-     *   - isCharacterSource=false 的是全局来源
-     * @param wiFormat 预设的世界书格式模板(如 `[{0}]`),{0} 替换为条目内容
-     * @param scanContext 全局扫描上下文
-     */
     fun activate(
         messages: List<String>,
         messageNames: List<String> = emptyList(),
         lorebooks: List<TaggedLorebook>,
         wiFormat: String = "",
         scanContext: ScanContext = ScanContext(),
+        messageCount: Int = messages.size,
+        timedEffects: LorebookTimedEffectState = LorebookTimedEffectState.Empty,
+        isDryRun: Boolean = false,
     ): ActivationResult {
-        if (lorebooks.isEmpty()) return ActivationResult()
-
-        // 按 characterStrategy 决定条目合并顺序
         val strategy = lorebooks.firstOrNull()?.book?.characterStrategy ?: WiCharacterStrategy.CHARACTER_FIRST
-        val allCandidates = buildCandidatesByStrategy(lorebooks, strategy)
-        if (allCandidates.isEmpty()) return ActivationResult()
+        val candidates = buildCandidatesByStrategy(lorebooks, strategy)
+        if (candidates.isEmpty()) {
+            val activeTimedEffects = resolveActiveTimedEffects(
+                candidates = emptyList(),
+                currentState = timedEffects,
+                messageCount = messageCount,
+                isDryRun = isDryRun,
+            )
+            return ActivationResult(nextTimedEffects = activeTimedEffects.nextState)
+        }
 
-        // 第一轮扫描
-        val activated = mutableSetOf<CandidateEntry>()
-        val activatedContent = mutableListOf<String>()
-        val scores = mutableMapOf<CandidateEntry, Int>()
-        val baseScanDepth = lorebooks.maxOf { it.book.scanDepth }
-
-        scanAndActivate(
-            messages = messages,
-            messageNames = messageNames,
-            candidates = allCandidates,
-            activated = activated,
-            activatedContent = activatedContent,
-            scores = scores,
-            scanContext = scanContext,
-            depthOverride = null,
+        val activeTimedEffects = resolveActiveTimedEffects(
+            candidates = candidates,
+            currentState = timedEffects,
+            messageCount = messageCount,
+            isDryRun = isDryRun,
         )
 
-        // minActivations 扩展深度
-        val minActivations = lorebooks.maxOf { it.book.minActivations }
-        val minActivationsDepthMax = lorebooks.maxOf { it.book.minActivationsDepthMax }
-        if (minActivations > 0 && activated.size < minActivations) {
-            var currentDepth = baseScanDepth
-            while (activated.size < minActivations && currentDepth < messages.size) {
-                if (minActivationsDepthMax > 0 && currentDepth >= minActivationsDepthMax) break
-                currentDepth++
-                val remaining = allCandidates.filter { it !in activated }
-                if (remaining.isEmpty()) break
-                scanAndActivate(
-                    messages = messages,
-                    messageNames = messageNames,
-                    candidates = remaining,
-                    activated = activated,
-                    activatedContent = activatedContent,
-                    scores = scores,
-                    scanContext = scanContext,
-                    depthOverride = currentDepth,
-                )
-            }
-        }
+        val scanState = ActivationScanState(
+            originalMessages = messages,
+            originalMessageNames = messageNames,
+            scanContext = scanContext,
+            activeTimedEffects = activeTimedEffects,
+            messageCount = messageCount,
+        )
 
-        // 递归扫描
-        val recursiveBooks = lorebooks.filter { it.book.recursiveScanning }
-        if (recursiveBooks.isNotEmpty()) {
-            var recursionStep = 0
-            val maxSteps = lorebooks.maxOf { it.book.maxRecursionSteps }.let { if (it <= 0) 10 else it }
-            var newActivations = true
-            while (newActivations && recursionStep < maxSteps) {
-                recursionStep++
-                val beforeSize = activated.size
-                val recursiveCandidates = allCandidates.filter { candidate ->
-                    candidate !in activated && !candidate.entry.excludeRecursion
-                }
-                if (recursiveCandidates.isEmpty()) break
-                // 把已激活内容加入扫描缓冲
-                val extendedMessages = activatedContent + messages
-                val extendedNames = List(activatedContent.size) { "" } + messageNames
-                scanAndActivate(
-                    messages = extendedMessages,
-                    messageNames = extendedNames,
-                    candidates = recursiveCandidates,
-                    activated = activated,
-                    activatedContent = activatedContent,
-                    scores = scores,
-                    scanContext = scanContext,
-                    depthOverride = null,
-                )
-                newActivations = activated.size > beforeSize
-            }
-        }
+        val initialScan = scanCandidates(
+            candidates = candidates,
+            scanState = scanState,
+            scanMode = ScanMode.NORMAL,
+            depthOverride = null,
+            recursionDelayLevel = 0,
+        )
+        scanState.pendingRecursionContent.addAll(initialScan.recursionContent)
 
-        // 互斥组处理
-        val globalUseGroupScoring = lorebooks.any { it.book.useGroupScoring }
-        val afterGrouping = resolveGroups(activated.toList(), scores, globalUseGroupScoring)
+        applyMinActivations(candidates, lorebooks, scanState)
+        applyRecursiveScanning(candidates, lorebooks, scanState)
 
-        // 按 order 从高到低排序
+        val afterGrouping = resolveGroups(
+            candidates = scanState.activated.values.toList(),
+            scores = scanState.scores,
+            globalUseGroupScoring = lorebooks.any { it.book.useGroupScoring },
+            activeTimedEffects = activeTimedEffects,
+        )
+
         val sorted = afterGrouping.sortedByDescending { it.entry.order }
-
-        // Token 预算裁剪
-        val percentBudget = lorebooks.maxOf { book ->
-            (book.book.tokenBudget * scanContext.maxContextTokens / 100).coerceAtLeast(1)
-        }
-        val budgetCap = lorebooks.maxOf { it.book.budgetCap }
-        val effectiveBudget = if (budgetCap > 0) minOf(percentBudget, budgetCap) else percentBudget
-
-        var usedTokens = 0
-        var overflowed = false
-        val withinBudget = mutableListOf<CandidateEntry>()
-        for (candidate in sorted) {
-            if (candidate.entry.ignoreBudget) {
-                withinBudget.add(candidate)
-                continue
-            }
-            val content = formatContent(candidate.entry, wiFormat)
-            val tokens = tokenCounter.countTokens(content)
-            if (usedTokens + tokens <= effectiveBudget) {
-                usedTokens += tokens
-                withinBudget.add(candidate)
-            } else {
-                overflowed = true
-            }
+        val withinBudget = selectEntriesWithinBudget(sorted, lorebooks, scanContext, wiFormat)
+        val nextTimedEffects = if (isDryRun) {
+            activeTimedEffects.nextState
+        } else {
+            applyNewTimedEffects(withinBudget.entries, activeTimedEffects.nextState, messageCount)
         }
 
-        return buildResult(withinBudget, wiFormat, overflowed)
+        return buildResult(
+            sorted = withinBudget.entries,
+            wiFormat = wiFormat,
+            overflowed = withinBudget.overflowed,
+            nextTimedEffects = nextTimedEffects,
+        )
     }
 
-    /**
-     * 按 characterStrategy 合并条目来源。
-     */
     private fun buildCandidatesByStrategy(
         lorebooks: List<TaggedLorebook>,
         strategy: Int,
     ): List<CandidateEntry> {
         val characterCandidates = lorebooks
             .filter { it.isCharacterSource }
-            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { CandidateEntry(it, tagged.book) } }
+            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { tagged.toCandidate(it) } }
 
         val globalCandidates = lorebooks
             .filter { !it.isCharacterSource }
-            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { CandidateEntry(it, tagged.book) } }
+            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { tagged.toCandidate(it) } }
 
         return when (strategy) {
-            WiCharacterStrategy.EVENLY -> {
-                (globalCandidates + characterCandidates).sortedByDescending { it.entry.order }
-            }
+            WiCharacterStrategy.EVENLY -> (globalCandidates + characterCandidates).sortedByDescending { it.entry.order }
             WiCharacterStrategy.CHARACTER_FIRST -> {
                 characterCandidates.sortedByDescending { it.entry.order } +
                     globalCandidates.sortedByDescending { it.entry.order }
@@ -239,83 +145,314 @@ class LorebookEngine @Inject constructor(
                 globalCandidates.sortedByDescending { it.entry.order } +
                     characterCandidates.sortedByDescending { it.entry.order }
             }
-            else -> (characterCandidates + globalCandidates)
+            else -> characterCandidates + globalCandidates
         }
     }
 
-    private fun scanAndActivate(
-        messages: List<String>,
-        messageNames: List<String>,
+    private fun TaggedLorebook.toCandidate(entry: LorebookEntry): CandidateEntry {
+        val source = sourceKey.ifBlank { book.id }
+        val key = "$source.${entry.uid}"
+        return CandidateEntry(
+            entry = entry,
+            book = book,
+            sourceKey = source,
+            timedEffectKey = key,
+            entryHash = hashEntry(source, entry),
+        )
+    }
+
+    private fun applyMinActivations(
         candidates: List<CandidateEntry>,
-        activated: MutableSet<CandidateEntry>,
-        activatedContent: MutableList<String>,
-        scores: MutableMap<CandidateEntry, Int>,
-        scanContext: ScanContext,
-        depthOverride: Int?,
+        lorebooks: List<TaggedLorebook>,
+        scanState: ActivationScanState,
     ) {
+        val minActivations = lorebooks.maxOf { it.book.minActivations }
+        if (minActivations <= 0 || scanState.activated.size >= minActivations) return
+
+        val minActivationsDepthMax = lorebooks.maxOf { it.book.minActivationsDepthMax }
+        var currentDepth = lorebooks.maxOf { it.book.scanDepth }
+        while (scanState.activated.size < minActivations && currentDepth < scanState.originalMessages.size) {
+            if (minActivationsDepthMax > 0 && currentDepth >= minActivationsDepthMax) break
+            currentDepth++
+            val result = scanCandidates(
+                candidates = candidates,
+                scanState = scanState,
+                scanMode = ScanMode.MIN_ACTIVATIONS,
+                depthOverride = currentDepth,
+                recursionDelayLevel = 0,
+            )
+            scanState.pendingRecursionContent.addAll(result.recursionContent)
+            if (!result.changed && candidates.all { it.timedEffectKey in scanState.activated }) break
+        }
+    }
+
+    private fun applyRecursiveScanning(
+        candidates: List<CandidateEntry>,
+        lorebooks: List<TaggedLorebook>,
+        scanState: ActivationScanState,
+    ) {
+        if (lorebooks.none { it.book.recursiveScanning }) return
+
+        val delayLevels = candidates
+            .map { it.entry.delayUntilRecursion }
+            .filter { it > 0 }
+            .distinct()
+            .sorted()
+        val firstDelayLevel = delayLevels.firstOrNull() ?: 0
+        val remainingDelayLevels = if (delayLevels.isEmpty()) emptyList() else delayLevels.drop(1)
+        val maxSteps = lorebooks.maxOf { it.book.maxRecursionSteps }.let { if (it <= 0) 10 else it }
+        var recursionStep = 0
+
+        if (scanState.pendingRecursionContent.isNotEmpty()) {
+            scanState.recursionBuffer.add(scanState.pendingRecursionContent.joinToString("\n"))
+            scanState.pendingRecursionContent.clear()
+        }
+
+        while (recursionStep < maxSteps && scanState.recursionBuffer.isNotEmpty()) {
+            recursionStep++
+            val result = scanCandidates(
+                candidates = candidates,
+                scanState = scanState,
+                scanMode = ScanMode.RECURSION,
+                depthOverride = null,
+                recursionDelayLevel = firstDelayLevel,
+            )
+            if (!result.changed) break
+            if (result.recursionContent.isNotEmpty()) {
+                scanState.recursionBuffer.add(result.recursionContent.joinToString("\n"))
+            }
+        }
+
+        for (delayLevel in remainingDelayLevels) {
+            val result = scanCandidates(
+                candidates = candidates,
+                scanState = scanState,
+                scanMode = ScanMode.RECURSION,
+                depthOverride = null,
+                recursionDelayLevel = delayLevel,
+            )
+            if (result.recursionContent.isNotEmpty()) {
+                scanState.recursionBuffer.add(result.recursionContent.joinToString("\n"))
+            }
+        }
+    }
+
+    private fun scanCandidates(
+        candidates: List<CandidateEntry>,
+        scanState: ActivationScanState,
+        scanMode: ScanMode,
+        depthOverride: Int?,
+        recursionDelayLevel: Int,
+    ): ScanPassResult {
+        scanState.currentScanMode = scanMode
+        var changed = false
+        val recursionContent = mutableListOf<String>()
         for (candidate in candidates) {
-            if (candidate in activated) continue
+            if (candidate.timedEffectKey in scanState.activated) continue
             val entry = candidate.entry
-            val book = candidate.book
 
-            // characterFilter 硬过滤
-            if (!passesCharacterFilter(entry.characterFilter, scanContext.currentCharacterId)) continue
+            if (!passesCharacterFilter(entry.characterFilter, scanState.scanContext.currentCharacterId)) continue
 
-            val scanDepth = depthOverride ?: (entry.entryScanDepth ?: book.scanDepth)
-            val caseSensitive = entry.entryCaseSensitive ?: book.caseSensitive
-            val matchWholeWords = entry.entryMatchWholeWords ?: book.matchWholeWords
-            val includeNames = book.includeNames
+            val isSticky = candidate.timedEffectKey in scanState.activeTimedEffects.stickyKeys
+            val isCooldown = candidate.timedEffectKey in scanState.activeTimedEffects.cooldownKeys
+            val isDelay = entry.delay?.let { scanState.messageCount < it } == true
 
-            // 常驻条目直接激活
-            if (entry.constant) {
-                activated.add(candidate)
-                scores[candidate] = Int.MAX_VALUE
-                if (!entry.preventRecursion) activatedContent.add(entry.content)
-                continue
+            if (isDelay) continue
+            if (isCooldown && !isSticky) continue
+            if (scanMode != ScanMode.RECURSION && entry.delayUntilRecursion > 0 && !isSticky) continue
+            if (scanMode == ScanMode.RECURSION && entry.delayUntilRecursion > recursionDelayLevel && !isSticky) continue
+            if (scanMode == ScanMode.RECURSION && entry.excludeRecursion && !isSticky) continue
+
+            val score = when {
+                entry.constant -> Int.MAX_VALUE
+                isSticky -> Int.MAX_VALUE
+                else -> matchEntry(candidate, scanState, depthOverride) ?: continue
             }
 
-            // 构建扫描文本
-            val textToScan = buildScanText(messages, messageNames, scanDepth, includeNames, entry, scanContext)
-            if (textToScan.isBlank()) continue
-
-            // 主关键词匹配 + 计分
-            var score = 0
-            val primaryMatch = entry.key.any { key ->
-                if (key.isBlank()) return@any false
-                val matched = matchKey(textToScan, key, caseSensitive, matchWholeWords)
-                if (matched) score++
-                matched
-            }
-            if (!primaryMatch) continue
-
-            // 次要关键词逻辑
-            if (entry.selective && entry.keysecondary.isNotEmpty()) {
-                val secondaryResult = checkSecondaryKeys(
-                    textToScan, entry.keysecondary, entry.selectiveLogic, caseSensitive, matchWholeWords,
-                )
-                if (!secondaryResult) continue
-                // 次要关键词命中也计入 score
-                for (key in entry.keysecondary) {
-                    if (key.isNotBlank() && matchKey(textToScan, key, caseSensitive, matchWholeWords)) {
-                        score++
-                    }
-                }
-            }
-
-            // 概率判断
-            if (entry.useProbability && entry.probability < 100) {
+            if (!isSticky && entry.useProbability && entry.probability < 100) {
                 if ((1..100).random() > entry.probability) continue
             }
 
-            activated.add(candidate)
-            scores[candidate] = score
-            if (!entry.preventRecursion) activatedContent.add(entry.content)
+            scanState.activated[candidate.timedEffectKey] = candidate
+            scanState.scores[candidate] = score
+            if (!entry.preventRecursion) {
+                recursionContent.add(entry.content)
+            }
+            changed = true
+        }
+        return ScanPassResult(changed = changed, recursionContent = recursionContent)
+    }
+
+    private fun matchEntry(
+        candidate: CandidateEntry,
+        scanState: ActivationScanState,
+        depthOverride: Int?,
+    ): Int? {
+        val entry = candidate.entry
+        val book = candidate.book
+        val scanDepth = depthOverride ?: (entry.entryScanDepth ?: book.scanDepth)
+        val caseSensitive = entry.entryCaseSensitive ?: book.caseSensitive
+        val matchWholeWords = entry.entryMatchWholeWords ?: book.matchWholeWords
+        val shouldUseRecursionBuffer = scanState.recursionBuffer.isNotEmpty() && scanState.currentScanMode != ScanMode.MIN_ACTIVATIONS
+        val baseTextToScan = buildScanText(
+            messages = scanState.originalMessages,
+            messageNames = scanState.originalMessageNames,
+            scanDepth = scanDepth,
+            includeNames = book.includeNames,
+            entry = entry,
+            scanContext = scanState.scanContext,
+        )
+        val textToScan = if (shouldUseRecursionBuffer) {
+            listOf(baseTextToScan, scanState.recursionBuffer.joinToString("\n"))
+                .filter { it.isNotBlank() }
+                .joinToString("\n")
+        } else {
+            baseTextToScan
+        }
+        if (textToScan.isBlank()) return null
+
+        var score = 0
+        val primaryMatched = entry.key.any { key ->
+            if (key.isBlank()) return@any false
+            val matched = matchKey(textToScan, key, caseSensitive, matchWholeWords)
+            if (matched) score++
+            matched
+        }
+        if (!primaryMatched) return null
+
+        if (entry.selective && entry.keysecondary.isNotEmpty()) {
+            val secondaryMatched = checkSecondaryKeys(
+                text = textToScan,
+                secondaryKeys = entry.keysecondary,
+                logic = entry.selectiveLogic,
+                caseSensitive = caseSensitive,
+                matchWholeWords = matchWholeWords,
+            )
+            if (!secondaryMatched) return null
+            for (key in entry.keysecondary) {
+                if (key.isNotBlank() && matchKey(textToScan, key, caseSensitive, matchWholeWords)) {
+                    score++
+                }
+            }
+        }
+
+        return score
+    }
+
+    private fun resolveActiveTimedEffects(
+        candidates: List<CandidateEntry>,
+        currentState: LorebookTimedEffectState,
+        messageCount: Int,
+        isDryRun: Boolean,
+    ): ActiveTimedEffects {
+        if (isDryRun) {
+            return ActiveTimedEffects(
+                stickyKeys = emptySet(),
+                cooldownKeys = emptySet(),
+                nextState = currentState,
+            )
+        }
+
+        val candidatesByKey = candidates.associateBy { it.timedEffectKey }
+        val activeStickyKeys = mutableSetOf<String>()
+        val activeCooldownKeys = mutableSetOf<String>()
+        val nextSticky = mutableMapOf<String, LorebookTimedEffect>()
+        val nextCooldown = mutableMapOf<String, LorebookTimedEffect>()
+
+        for ((key, effect) in currentState.sticky) {
+            val candidate = candidatesByKey[key]
+            if (candidate == null) {
+                if (messageCount < effect.endMessageCount) {
+                    nextSticky[key] = effect
+                }
+                continue
+            }
+            if (shouldRemoveEffect(effect, candidate, messageCount, EffectType.STICKY)) continue
+            if (messageCount >= effect.endMessageCount) {
+                val cooldown = candidate.entry.cooldown
+                if (cooldown != null) {
+                    val cooldownEffect = createTimedEffect(candidate, EffectType.COOLDOWN, messageCount, protectedEffect = true)
+                    nextCooldown[key] = cooldownEffect
+                    activeCooldownKeys.add(key)
+                }
+                continue
+            }
+            nextSticky[key] = effect
+            activeStickyKeys.add(key)
+        }
+
+        for ((key, effect) in currentState.cooldown) {
+            if (key in nextCooldown) continue
+            val candidate = candidatesByKey[key]
+            if (candidate == null) {
+                if (messageCount < effect.endMessageCount) {
+                    nextCooldown[key] = effect
+                }
+                continue
+            }
+            if (shouldRemoveEffect(effect, candidate, messageCount, EffectType.COOLDOWN)) continue
+            if (messageCount >= effect.endMessageCount) continue
+            nextCooldown[key] = effect
+            activeCooldownKeys.add(key)
+        }
+
+        return ActiveTimedEffects(
+            stickyKeys = activeStickyKeys,
+            cooldownKeys = activeCooldownKeys,
+            nextState = LorebookTimedEffectState(sticky = nextSticky, cooldown = nextCooldown),
+        )
+    }
+
+    private fun shouldRemoveEffect(
+        effect: LorebookTimedEffect,
+        candidate: CandidateEntry,
+        messageCount: Int,
+        effectType: EffectType,
+    ): Boolean {
+        if (messageCount <= effect.startMessageCount && !effect.protectedEffect) return true
+        if (candidate.entryHash != effect.entryHash) return true
+        return when (effectType) {
+            EffectType.STICKY -> candidate.entry.sticky == null
+            EffectType.COOLDOWN -> candidate.entry.cooldown == null
         }
     }
 
-    /**
-     * 构建扫描文本:聊天消息 + match* 扩展文本。
-     */
+    private fun applyNewTimedEffects(
+        activatedEntries: List<CandidateEntry>,
+        currentState: LorebookTimedEffectState,
+        messageCount: Int,
+    ): LorebookTimedEffectState {
+        val nextSticky = currentState.sticky.toMutableMap()
+        val nextCooldown = currentState.cooldown.toMutableMap()
+        for (candidate in activatedEntries) {
+            if (candidate.entry.sticky != null && candidate.timedEffectKey !in nextSticky) {
+                nextSticky[candidate.timedEffectKey] = createTimedEffect(candidate, EffectType.STICKY, messageCount, false)
+            }
+            if (candidate.entry.cooldown != null && candidate.timedEffectKey !in nextCooldown) {
+                nextCooldown[candidate.timedEffectKey] = createTimedEffect(candidate, EffectType.COOLDOWN, messageCount, false)
+            }
+        }
+        return LorebookTimedEffectState(sticky = nextSticky, cooldown = nextCooldown)
+    }
+
+    private fun createTimedEffect(
+        candidate: CandidateEntry,
+        effectType: EffectType,
+        messageCount: Int,
+        protectedEffect: Boolean,
+    ): LorebookTimedEffect {
+        val duration = when (effectType) {
+            EffectType.STICKY -> candidate.entry.sticky
+            EffectType.COOLDOWN -> candidate.entry.cooldown
+        } ?: 0
+        return LorebookTimedEffect(
+            entryHash = candidate.entryHash,
+            startMessageCount = messageCount,
+            endMessageCount = messageCount + duration,
+            protectedEffect = protectedEffect,
+        )
+    }
+
     private fun buildScanText(
         messages: List<String>,
         messageNames: List<String>,
@@ -324,12 +461,12 @@ class LorebookEngine @Inject constructor(
         entry: LorebookEntry,
         scanContext: ScanContext,
     ): String {
-        val chatText = messages.take(scanDepth).mapIndexed { i, msg ->
-            val name = messageNames.getOrNull(i).orEmpty()
-            if (includeNames && name.isNotBlank()) "$name: $msg" else msg
+        val chatText = messages.take(scanDepth).mapIndexed { index, message ->
+            val name = messageNames.getOrNull(index).orEmpty()
+            if (includeNames && name.isNotBlank()) "$name: $message" else message
         }.joinToString("\n")
 
-        val extra = buildString {
+        val extraText = buildString {
             if (entry.matchPersonaDescription && scanContext.personaDescription.isNotBlank()) {
                 append("\n").append(scanContext.personaDescription)
             }
@@ -350,7 +487,7 @@ class LorebookEngine @Inject constructor(
             }
         }
 
-        return chatText + extra
+        return chatText + extraText
     }
 
     private fun matchKey(
@@ -361,12 +498,8 @@ class LorebookEngine @Inject constructor(
     ): Boolean {
         val searchText = if (caseSensitive) text else text.lowercase()
         val searchKey = if (caseSensitive) key else key.lowercase()
+        if (!matchWholeWords) return searchText.contains(searchKey)
 
-        if (!matchWholeWords) {
-            return searchText.contains(searchKey)
-        }
-
-        // 整词匹配:用正则 \b 边界
         val pattern = try {
             Regex("\\b${Regex.escape(searchKey)}\\b", if (caseSensitive) emptySet() else setOf(RegexOption.IGNORE_CASE))
         } catch (_: Throwable) {
@@ -390,7 +523,6 @@ class LorebookEngine @Inject constructor(
             if (matched) hasAny = true
             if (!matched) hasAll = false
 
-            // 短路优化
             when (logic) {
                 SelectiveLogic.AND_ANY -> if (matched) return true
                 SelectiveLogic.NOT_ALL -> if (!matched) return true
@@ -405,9 +537,6 @@ class LorebookEngine @Inject constructor(
         }
     }
 
-    /**
-     * characterFilter 过滤。返回 true 表示通过(不被过滤)。
-     */
     private fun passesCharacterFilter(filter: CharacterFilter?, currentCharacterId: String?): Boolean {
         if (filter == null) return true
         if (currentCharacterId == null) return true
@@ -417,13 +546,11 @@ class LorebookEngine @Inject constructor(
         return if (filter.isExclude) !nameIncluded else nameIncluded
     }
 
-    /**
-     * 互斥组处理。支持 useGroupScoring 评分模式。
-     */
     private fun resolveGroups(
         candidates: List<CandidateEntry>,
         scores: Map<CandidateEntry, Int>,
         globalUseGroupScoring: Boolean,
+        activeTimedEffects: ActiveTimedEffects,
     ): List<CandidateEntry> {
         val grouped = candidates.groupBy { it.entry.group }
         val result = mutableListOf<CandidateEntry>()
@@ -433,36 +560,71 @@ class LorebookEngine @Inject constructor(
                 continue
             }
 
-            // groupOverride 的强制保留
-            val overrides = entries.filter { it.entry.groupOverride }
+            val stickyEntries = entries.filter { it.timedEffectKey in activeTimedEffects.stickyKeys }
+            if (stickyEntries.isNotEmpty()) {
+                result.addAll(stickyEntries)
+                continue
+            }
+
+            val activeEntries = entries.filterNot { candidate ->
+                candidate.timedEffectKey in activeTimedEffects.cooldownKeys
+            }
+            if (activeEntries.isEmpty()) continue
+
+            val overrides = activeEntries.filter { it.entry.groupOverride }
             if (overrides.isNotEmpty()) {
                 result.addAll(overrides)
                 continue
             }
 
-            // 评分模式:按关键词命中数筛选
-            val useScoring = globalUseGroupScoring || entries.any { it.entry.entryUseGroupScoring == true }
+            val useScoring = globalUseGroupScoring || activeEntries.any { it.entry.entryUseGroupScoring == true }
             if (useScoring) {
-                val maxScore = entries.maxOfOrNull { scores[it] ?: 0 } ?: 0
-                val topScored = entries.filter { (scores[it] ?: 0) >= maxScore }
-                if (topScored.size == 1) {
-                    result.add(topScored.first())
-                } else {
-                    // 同分时按 groupWeight 选最高
-                    topScored.maxByOrNull { it.entry.groupWeight }?.let { result.add(it) }
-                }
+                val maxScore = activeEntries.maxOfOrNull { scores[it] ?: 0 } ?: 0
+                val topScored = activeEntries.filter { (scores[it] ?: 0) >= maxScore }
+                topScored.maxByOrNull { it.entry.groupWeight }?.let { result.add(it) }
             } else {
-                // 默认模式:按 groupWeight 选最高
-                entries.maxByOrNull { it.entry.groupWeight }?.let { result.add(it) }
+                activeEntries.maxByOrNull { it.entry.groupWeight }?.let { result.add(it) }
             }
         }
         return result
+    }
+
+    private fun selectEntriesWithinBudget(
+        sorted: List<CandidateEntry>,
+        lorebooks: List<TaggedLorebook>,
+        scanContext: ScanContext,
+        wiFormat: String,
+    ): BudgetSelection {
+        val percentBudget = lorebooks.maxOf { book ->
+            (book.book.tokenBudget * scanContext.maxContextTokens / 100).coerceAtLeast(1)
+        }
+        val budgetCap = lorebooks.maxOf { it.book.budgetCap }
+        val effectiveBudget = if (budgetCap > 0) minOf(percentBudget, budgetCap) else percentBudget
+
+        var usedTokens = 0
+        var overflowed = false
+        val withinBudget = mutableListOf<CandidateEntry>()
+        for (candidate in sorted) {
+            if (candidate.entry.ignoreBudget) {
+                withinBudget.add(candidate)
+                continue
+            }
+            val tokens = tokenCounter.countTokens(formatContent(candidate.entry, wiFormat))
+            if (usedTokens + tokens <= effectiveBudget) {
+                usedTokens += tokens
+                withinBudget.add(candidate)
+            } else {
+                overflowed = true
+            }
+        }
+        return BudgetSelection(entries = withinBudget, overflowed = overflowed)
     }
 
     private fun buildResult(
         sorted: List<CandidateEntry>,
         wiFormat: String,
         overflowed: Boolean,
+        nextTimedEffects: LorebookTimedEffectState,
     ): ActivationResult {
         val beforeEntries = mutableListOf<String>()
         val afterEntries = mutableListOf<String>()
@@ -484,7 +646,6 @@ class LorebookEngine @Inject constructor(
                 }
                 WiPosition.EM_TOP -> emTopEntries.add(content)
                 WiPosition.EM_BOTTOM -> emBottomEntries.add(content)
-                // AN_TOP / AN_BOTTOM 暂时归到 before/after(无 AN 模块)
                 WiPosition.AN_TOP -> beforeEntries.add(content)
                 WiPosition.AN_BOTTOM -> afterEntries.add(content)
             }
@@ -502,6 +663,7 @@ class LorebookEngine @Inject constructor(
             exampleBottom = emBottomEntries.joinToString("\n"),
             activatedEntries = sorted.map { it.entry },
             budgetOverflowed = overflowed,
+            nextTimedEffects = nextTimedEffects,
         )
     }
 
@@ -519,17 +681,65 @@ class LorebookEngine @Inject constructor(
         return wiFormat.replace("{0}", raw)
     }
 
+    private fun hashEntry(sourceKey: String, entry: LorebookEntry): Int {
+        return "$sourceKey:${entryJson.encodeToString(entry)}".hashCode()
+    }
+
     private data class CandidateEntry(
         val entry: LorebookEntry,
         val book: Lorebook,
+        val sourceKey: String,
+        val timedEffectKey: String,
+        val entryHash: Int,
     )
+
+    private data class ActiveTimedEffects(
+        val stickyKeys: Set<String>,
+        val cooldownKeys: Set<String>,
+        val nextState: LorebookTimedEffectState,
+    )
+
+    private data class ActivationScanState(
+        val originalMessages: List<String>,
+        val originalMessageNames: List<String>,
+        val scanContext: ScanContext,
+        val activeTimedEffects: ActiveTimedEffects,
+        val messageCount: Int,
+        val activated: MutableMap<String, CandidateEntry> = linkedMapOf(),
+        val recursionBuffer: MutableList<String> = mutableListOf(),
+        val pendingRecursionContent: MutableList<String> = mutableListOf(),
+        val scores: MutableMap<CandidateEntry, Int> = mutableMapOf(),
+        var currentScanMode: ScanMode = ScanMode.NORMAL,
+    )
+
+    private data class BudgetSelection(
+        val entries: List<CandidateEntry>,
+        val overflowed: Boolean,
+    )
+
+    private data class ScanPassResult(
+        val changed: Boolean,
+        val recursionContent: List<String>,
+    )
+
+    private enum class EffectType {
+        STICKY,
+        COOLDOWN,
+    }
+
+    private enum class ScanMode {
+        NORMAL,
+        MIN_ACTIVATIONS,
+        RECURSION,
+    }
+
+    private companion object {
+        val entryJson = Json { encodeDefaults = true }
+    }
 }
 
-/**
- * 带来源标记的世界书。用于区分角色来源和全局来源,供 characterStrategy 排序使用。
- */
 data class TaggedLorebook(
     val book: Lorebook,
-    /** true = 角色来源(角色内嵌 / 角色绑定),false = 全局来源 */
     val isCharacterSource: Boolean,
+    val sourceKey: String = book.id,
 )

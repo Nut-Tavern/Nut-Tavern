@@ -48,6 +48,9 @@ interface ConversationDao {
     @Update
     suspend fun update(conversation: ConversationEntity)
 
+    @Query("UPDATE conversations SET lorebookTimedEffectsJson = :timedEffectsJson WHERE id = :conversationId")
+    suspend fun updateLorebookTimedEffects(conversationId: String, timedEffectsJson: String)
+
     @Query("DELETE FROM conversations WHERE id = :id")
     suspend fun deleteById(id: String)
 }
