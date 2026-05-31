@@ -50,10 +50,19 @@ internal fun buildLeadingInlineAnnotatedString(
     return buildAnnotatedString {
         container.children.forEach { child ->
             if (child.type in BLOCK_TYPES_INSIDE_LIST_ITEM) return@forEach
+            // 列表标记 token(bullet `- ` / number `1. ` / checkbox `[x] `)不是正文,
+            // 由渲染层单独画(bullet Text / checkbox Icon),这里跳过,避免注入到文字里。
+            if (child.type in LIST_MARKER_TOKENS) return@forEach
             appendInline(child, rawText, context)
         }
     }
 }
+
+private val LIST_MARKER_TOKENS = setOf(
+    MarkdownTokenTypes.LIST_BULLET,
+    MarkdownTokenTypes.LIST_NUMBER,
+    GFMTokenTypes.CHECK_BOX,
+)
 
 private val BLOCK_TYPES_INSIDE_LIST_ITEM = setOf(
     MarkdownElementTypes.UNORDERED_LIST,

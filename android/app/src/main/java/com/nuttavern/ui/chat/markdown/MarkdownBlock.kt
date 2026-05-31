@@ -1,7 +1,9 @@
 package com.nuttavern.ui.chat.markdown
 
+import android.content.ClipData
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,21 +14,32 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.platform.ClipEntry
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.Lucide
+import com.composables.icons.lucide.Square
+import com.composables.icons.lucide.SquareCheckBig
+import kotlinx.coroutines.launch
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
@@ -183,6 +196,17 @@ private fun bulletForDepth(depth: Int): String = when (depth % 3) {
     else -> "▪  "
 }
 
+/**
+ * 识别 GFM 任务列表项:LIST_ITEM 直接含 CHECK_BOX 子节点(解析器产出独立节点,
+ * 不是文本前缀)。返回勾选状态;非任务项返回 null。
+ * 勾选判定:CHECK_BOX 原文 trim 后是否为 `[x]`(忽略大小写)。
+ */
+private fun detectCheckbox(item: ASTNode, rawText: String): Boolean? {
+    val checkbox = item.children.firstOrNull { it.type == GFMTokenTypes.CHECK_BOX } ?: return null
+    val mark = checkbox.textIn(rawText).trim()
+    return mark.equals("[x]", ignoreCase = true)
+}
+
 @Composable
 private fun ListItemRow(
     bullet: String,
@@ -192,18 +216,38 @@ private fun ListItemRow(
     color: Color,
 ) {
     val leading = buildLeadingInlineAnnotatedString(item, rawText)
+    // 任务列表:CHECK_BOX 是独立 AST 节点,这里按节点判定,改用只读图标(聊天里不可勾选)。
+    val checked = detectCheckbox(item, rawText)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.Top,
     ) {
-        Text(
-            text = bullet,
-            style = paragraphStyle(),
-            color = color,
-        )
+        if (checked != null) {
+            // Icon 无文字基线,Top 对齐会贴在行盒顶部偏高;下移半个行高差,视觉落在首行文字中线。
+            Icon(
+                imageVector = if (checked) Lucide.SquareCheckBig else Lucide.Square,
+                contentDescription = if (checked) "已完成" else "未完成",
+                tint = if (checked) MaterialTheme.colorScheme.primary else color,
+                modifier = Modifier
+                    .padding(
+                        end = MarkdownTokens.TaskCheckboxEndPadding,
+                        top = MarkdownTokens.TaskCheckboxTopPadding,
+                    )
+                    .size(MarkdownTokens.TaskCheckboxSize),
+            )
+        } else {
+            // 与正文同基线对齐:Top 对齐会让符号比文字偏高一点点,基线对齐才贴合首行文字。
+            Text(
+                text = bullet,
+                style = paragraphStyle(),
+                color = color,
+                modifier = Modifier.alignByBaseline(),
+            )
+        }
         Column(
             modifier = Modifier
-                .weight(1f),
+                .weight(1f)
+                .alignByBaseline(),
             verticalArrangement = Arrangement.spacedBy(MarkdownTokens.ListItemSpacing),
         ) {
             if (leading.isNotEmpty()) {
@@ -272,7 +316,6 @@ private fun RenderBlockQuote(
                 modifier = Modifier
                     .width(MarkdownTokens.BlockQuoteIndicatorWidth)
                     .fillMaxHeight()
-                    .padding(vertical = MarkdownTokens.BlockQuoteVerticalPadding)
                     .background(blockQuoteIndicatorColor()),
             )
             Column(
@@ -288,11 +331,25 @@ private fun RenderBlockQuote(
             ) {
                 node.children.forEach { child ->
                     if (child.type == MarkdownTokenTypes.BLOCK_QUOTE) return@forEach
-                    RenderMarkdownBlock(
-                        node = child,
-                        rawText = rawText,
-                        color = color,
-                    )
+                    // 引用内段落用小字专属样式(blockQuoteStyle);其余子块(嵌套列表 / 代码块 等)
+                    // 仍走通用递归,保持原有渲染。
+                    if (child.type == MarkdownElementTypes.PARAGRAPH) {
+                        val text = buildInlineAnnotatedString(child, rawText)
+                        if (text.isNotEmpty()) {
+                            Text(
+                                text = text,
+                                modifier = Modifier.fillMaxWidth(),
+                                style = blockQuoteStyle(),
+                                color = color,
+                            )
+                        }
+                    } else {
+                        RenderMarkdownBlock(
+                            node = child,
+                            rawText = rawText,
+                            color = color,
+                        )
+                    }
                 }
             }
         }
@@ -339,28 +396,69 @@ private fun RenderCodeContainer(
         color = codeBlockBackground(),
         shape = RoundedCornerShape(8.dp),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(MarkdownTokens.CodeBlockPadding),
-            verticalArrangement = Arrangement.spacedBy(MarkdownTokens.CodeBlockLanguagePadding),
-        ) {
-            if (language.isNotBlank()) {
-                Text(
-                    text = language,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // 头部栏:单独深色块(语言标签左 + 复制按钮右),与代码区分层。
+            CodeBlockHeader(language = language, code = code)
             // 代码块横向滚动,避免长行折行破坏可读性。
             val scrollState = rememberScrollState()
-            Box(modifier = Modifier.horizontalScroll(scrollState)) {
+            Box(
+                modifier = Modifier
+                    .horizontalScroll(scrollState)
+                    .padding(MarkdownTokens.CodeBlockPadding),
+            ) {
                 Text(
                     text = code,
                     style = codeBlockTextStyle(),
                     color = MaterialTheme.colorScheme.onSurface,
                 )
             }
+        }
+    }
+}
+
+/** 代码块头部栏:单独深色块,语言标签 + 复制按钮。流式过程中复制按钮始终可用(复制当前已解析的代码)。 */
+@Composable
+private fun CodeBlockHeader(
+    language: String,
+    code: String,
+) {
+    val clipboard = LocalClipboard.current
+    val coroutineScope = rememberCoroutineScope()
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(codeBlockHeaderBackground())
+            .padding(
+                start = MarkdownTokens.CodeBlockPadding,
+                end = MarkdownTokens.CodeBlockHeaderEndPadding,
+                top = MarkdownTokens.CodeBlockHeaderVerticalPadding,
+                bottom = MarkdownTokens.CodeBlockHeaderVerticalPadding,
+            ),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = language.ifBlank { "code" },
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        Box(
+            modifier = Modifier
+                .size(MarkdownTokens.CodeCopyButtonSize)
+                .clip(RoundedCornerShape(6.dp))
+                .clickable {
+                    coroutineScope.launch {
+                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                    }
+                },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                imageVector = Lucide.Copy,
+                contentDescription = "复制代码",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(MarkdownTokens.CodeCopyIconSize),
+            )
         }
     }
 }
@@ -402,6 +500,7 @@ private fun RenderTable(
     )
     if (columnCount == 0) return
 
+    val alignments = parseColumnAlignments(node.textIn(rawText), columnCount)
     val borderColor = tableBorderColor()
     Surface(
         modifier = modifier
@@ -422,18 +521,47 @@ private fun RenderTable(
                 TableRow(
                     cells = padCells(headers, columnCount),
                     isHeader = true,
+                    rowBackground = tableHeaderBackground(),
+                    alignments = alignments,
                     color = color,
                     borderColor = borderColor,
                 )
             }
-            rows.forEach { row ->
+            rows.forEachIndexed { rowIndex, row ->
                 TableRow(
                     cells = padCells(row, columnCount),
                     isHeader = false,
+                    rowBackground = Color.Transparent,
+                    alignments = alignments,
                     color = color,
                     borderColor = borderColor,
+                    // 最后一行不画底部分隔线,避免与外边框重叠成双线。
+                    drawBottomDivider = rowIndex < rows.lastIndex,
                 )
             }
+        }
+    }
+}
+
+/**
+ * 从表格原文解析每列对齐(GFM 分隔行 `:---:` / `:---` / `---:`)。
+ * 分隔行是表格的第 2 个非空行;按 `|` 切列,看每列两端的冒号决定对齐。
+ * 解析失败 / 越界一律退回 [TextAlign.Start],不影响表格渲染。
+ */
+private fun parseColumnAlignments(tableText: String, columnCount: Int): List<TextAlign> {
+    val default = List(columnCount) { TextAlign.Start }
+    val lines = tableText.lines().map { it.trim() }.filter { it.isNotBlank() }
+    val separator = lines.getOrNull(1) ?: return default
+    if (!separator.contains('-')) return default
+    val specs = separator.trim('|').split('|').map { it.trim() }
+    return List(columnCount) { i ->
+        val spec = specs.getOrNull(i) ?: return@List TextAlign.Start
+        val left = spec.startsWith(':')
+        val right = spec.endsWith(':')
+        when {
+            left && right -> TextAlign.Center
+            right -> TextAlign.End
+            else -> TextAlign.Start
         }
     }
 }
@@ -442,28 +570,37 @@ private fun RenderTable(
 private fun TableRow(
     cells: List<AnnotatedString>,
     isHeader: Boolean,
+    rowBackground: Color,
+    alignments: List<TextAlign>,
     color: Color,
     borderColor: Color,
+    drawBottomDivider: Boolean = true,
 ) {
     // height(IntrinsicSize.Min) 让 Row 高度等于子元素最大固有高度,
     // 单元格之间的垂直分隔线 fillMaxHeight() 才能拿到完整高度。
     Row(modifier = Modifier
         .fillMaxWidth()
+        .background(rowBackground)
         .height(IntrinsicSize.Min),
     ) {
         cells.forEachIndexed { index, cell ->
+            val align = alignments.getOrElse(index) { TextAlign.Start }
             Box(
                 modifier = Modifier
-                    .widthIn(min = 96.dp)
-                    .padding(MarkdownTokens.TableCellPadding),
+                    .widthIn(min = MarkdownTokens.TableMinColumnWidth)
+                    .padding(
+                        horizontal = MarkdownTokens.TableCellHorizontalPadding,
+                        vertical = MarkdownTokens.TableCellVerticalPadding,
+                    ),
             ) {
                 Text(
                     text = cell,
                     style = if (isHeader) tableHeaderStyle() else tableCellStyle(),
                     color = color,
-                    textAlign = TextAlign.Start,
+                    textAlign = align,
                 )
             }
+            // 竖向分隔线:与横线同规格(1dp + borderColor)。
             if (index < cells.lastIndex) {
                 Box(
                     modifier = Modifier
@@ -474,7 +611,15 @@ private fun TableRow(
             }
         }
     }
-    HorizontalDivider(color = borderColor)
+    // 表头下分隔线加粗(2dp)以区分数据区;数据行用 1dp,最后一行不画(避免与外边框双线)。
+    if (isHeader) {
+        HorizontalDivider(
+            thickness = MarkdownTokens.TableHeaderDividerThickness,
+            color = MaterialTheme.colorScheme.outlineVariant,
+        )
+    } else if (drawBottomDivider) {
+        HorizontalDivider(color = borderColor)
+    }
 }
 
 @Composable

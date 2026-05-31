@@ -31,11 +31,20 @@ internal object MarkdownTokens {
     val HeadingTopSpacing: Dp = 12.dp
     val HeadingBottomSpacing: Dp = 4.dp
     val CodeBlockPadding: Dp = 12.dp
-    val CodeBlockLanguagePadding: Dp = 6.dp
+    val CodeBlockHeaderVerticalPadding: Dp = 4.dp
+    val CodeBlockHeaderEndPadding: Dp = 4.dp
+    val CodeCopyButtonSize: Dp = 28.dp
+    val CodeCopyIconSize: Dp = 16.dp
     val BlockQuoteIndicatorWidth: Dp = 4.dp
     val BlockQuoteContentPadding: Dp = 12.dp
     val BlockQuoteVerticalPadding: Dp = 8.dp
-    val TableCellPadding: Dp = 8.dp
+    val TableCellHorizontalPadding: Dp = 12.dp
+    val TableCellVerticalPadding: Dp = 10.dp
+    val TableMinColumnWidth: Dp = 72.dp
+    val TableHeaderDividerThickness: Dp = 2.dp
+    val TaskCheckboxSize: Dp = 18.dp
+    val TaskCheckboxEndPadding: Dp = 6.dp
+    val TaskCheckboxTopPadding: Dp = 2.dp
     val HorizontalRulePadding: Dp = 12.dp
     val ImagePlaceholderPadding: Dp = 4.dp
 }
@@ -61,7 +70,7 @@ internal fun paragraphStyle(): TextStyle = MaterialTheme.typography.bodyLarge
 @Composable
 @ReadOnlyComposable
 internal fun blockQuoteStyle(): TextStyle =
-    MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic)
+    MaterialTheme.typography.bodyMedium
 
 @Composable
 @ReadOnlyComposable
@@ -111,9 +120,15 @@ internal fun strikethroughSpanStyle(): SpanStyle =
 @ReadOnlyComposable
 internal fun codeBlockBackground(): Color = MaterialTheme.colorScheme.surfaceContainerHigh
 
+/** 代码块头部栏底色:比代码区更深一档,形成"语言标签+复制"独立深色条。 */
 @Composable
 @ReadOnlyComposable
-internal fun blockQuoteBackground(): Color = MaterialTheme.colorScheme.surfaceContainerLow
+internal fun codeBlockHeaderBackground(): Color =
+    MaterialTheme.colorScheme.surfaceContainerHighest
+
+@Composable
+@ReadOnlyComposable
+internal fun blockQuoteBackground(): Color = MaterialTheme.colorScheme.surfaceContainer
 
 @Composable
 @ReadOnlyComposable
@@ -123,3 +138,9 @@ internal fun blockQuoteIndicatorColor(): Color = MaterialTheme.colorScheme.prima
 @ReadOnlyComposable
 internal fun tableBorderColor(): Color =
     MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+
+/** 表头行底色:与数据区区分(M3 container 系列本身就是柔和背景,不加 alpha)。 */
+@Composable
+@ReadOnlyComposable
+internal fun tableHeaderBackground(): Color =
+    MaterialTheme.colorScheme.surfaceContainer
