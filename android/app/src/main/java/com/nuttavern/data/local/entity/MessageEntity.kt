@@ -25,5 +25,10 @@ data class MessageEntity(
     val content: String,
     @ColumnInfo(defaultValue = "''") val reasoningContent: String = "",
     @ColumnInfo(defaultValue = "0") val reasoningDurationMillis: Long = 0L,
-    @ColumnInfo(defaultValue = "0") val createdAt: Long = System.currentTimeMillis()
+    @ColumnInfo(defaultValue = "0") val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * 图片附件列表(JSON 数组字符串)。空数组 = 纯文本消息。
+     * 只存附件元数据(id / path / mime),图片二进制落 filesDir,不进 DB。
+     */
+    @ColumnInfo(defaultValue = "'[]'") val attachmentsJson: String = "[]",
 )

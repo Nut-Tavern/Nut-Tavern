@@ -1,6 +1,9 @@
 package com.nuttavern.ui.character
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,12 +44,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.BookOpenText
 import com.composables.icons.lucide.BookUser
 import com.composables.icons.lucide.ChevronRight
+import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Regex
 import com.composables.icons.lucide.Tags
@@ -60,8 +68,10 @@ import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
 import com.nuttavern.ui.components.NutTavernIconRow
 import com.nuttavern.ui.components.NutTavernLabeledTextField
+import com.nuttavern.ui.components.NutTavernSelectableRow
 import com.nuttavern.ui.components.NutTavernShapeTokens
 import com.nuttavern.ui.viewmodel.CharacterViewModel
+import java.io.File
 import kotlinx.serialization.json.Json
 
 @Composable
@@ -70,6 +80,60 @@ fun CharacterEditScreen(
     onBack: () -> Unit,
     viewModel: CharacterViewModel = hiltViewModel(),
 ) {
+    val context = LocalContext.current
+
+    var pendingExportPng by remember { mutableStateOf<ByteArray?>(null) }
+    val exportPngLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("image/png"),
+    ) { uri ->
+        val bytes = pendingExportPng
+        pendingExportPng = null
+        if (uri == null || bytes == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } ?: error("无法打开输出流")
+        }.isSuccess
+        android.widget.Toast.makeText(context, if (ok) "导出成功" else "导出失败", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    val exportJsonLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        val json = pendingExportJson
+        pendingExportJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) } ?: error("无法打开输出流")
+        }.isSuccess
+        android.widget.Toast.makeText(context, if (ok) "导出成功" else "导出失败", android.widget.Toast.LENGTH_SHORT).show()
+    }
+
+    val exportPng: (Character) -> Unit = { character ->
+        viewModel.exportDraftToPng(
+            character = character,
+            onReady = { fileName, bytes ->
+                pendingExportPng = bytes
+                exportPngLauncher.launch("$fileName.png")
+            },
+            onNoAvatar = {
+                android.widget.Toast.makeText(
+                    context,
+                    "需要先设置头像才能导出为图像,可改导出 JSON",
+                    android.widget.Toast.LENGTH_LONG,
+                ).show()
+            },
+            onError = { message ->
+                android.widget.Toast.makeText(context, message, android.widget.Toast.LENGTH_LONG).show()
+            },
+        )
+    }
+    val exportJson: (Character) -> Unit = { character ->
+        viewModel.exportDraftToJson(character) { fileName, jsonText ->
+            pendingExportJson = jsonText
+            exportJsonLauncher.launch("$fileName.json")
+        }
+    }
+
     if (characterId == NEW_CHARACTER_PLACEHOLDER_ID) {
         val newDraftSeed = rememberSaveable(stateSaver = CharacterSaver) {
             mutableStateOf(viewModel.newCharacter())
@@ -83,6 +147,9 @@ fun CharacterEditScreen(
             },
             onDelete = onBack,
             onBack = onBack,
+            onPersistAvatar = viewModel::persistAvatar,
+            onExportPng = exportPng,
+            onExportJson = exportJson,
         )
         return
     }
@@ -108,6 +175,9 @@ fun CharacterEditScreen(
             onBack()
         },
         onBack = onBack,
+        onPersistAvatar = viewModel::persistAvatar,
+        onExportPng = exportPng,
+        onExportJson = exportJson,
     )
 }
 
@@ -138,6 +208,9 @@ private fun CharacterEditScreenContent(
     onDelete: () -> Unit,
     onBack: () -> Unit,
     allowDelete: Boolean = true,
+    onPersistAvatar: (characterId: String, bytes: ByteArray, extension: String, onSaved: (String?) -> Unit) -> Unit = { _, _, _, onSaved -> onSaved(null) },
+    onExportPng: (Character) -> Unit = {},
+    onExportJson: (Character) -> Unit = {},
 ) {
     var draft by rememberSaveable(initial.id, stateSaver = CharacterSaver) {
         mutableStateOf(initial)
@@ -158,14 +231,32 @@ private fun CharacterEditScreenContent(
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var fullScreenField by remember { mutableStateOf<CharacterTextField?>(null) }
     var showRegexEditor by remember { mutableStateOf(false) }
-    var showLorebookBindSheet by remember { mutableStateOf(false) }
-    var showCharacterBookEditor by remember { mutableStateOf(false) }
+    var showCharacterLorebookSheet by remember { mutableStateOf(false) }
+    var showAuxiliaryLorebookSheet by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
-    var pendingNotice by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(pendingNotice) {
-        val name = pendingNotice ?: return@LaunchedEffect
-        snackbarHostState.showSnackbar("$name 暂未接入")
-        pendingNotice = null
+    var pendingMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingMessage) {
+        val message = pendingMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        pendingMessage = null
+    }
+
+    val context = LocalContext.current
+    val avatarPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) {
+            pendingMessage = "头像读取失败,请重试"
+            return@rememberLauncherForActivityResult
+        }
+        val extension = resolveAvatarExtension(context, uri)
+        onPersistAvatar(draft.id, bytes, extension) { path ->
+            if (path != null) draft = draft.copy(avatarPath = path)
+        }
     }
 
     val triggerBack: () -> Unit = {
@@ -203,7 +294,14 @@ private fun CharacterEditScreenContent(
             verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
         ) {
             item(key = "avatar") {
-                CharacterAvatarCard(onClick = { pendingNotice = "头像功能" })
+                CharacterAvatarCard(
+                    avatarPath = draft.avatarPath,
+                    onClick = {
+                        avatarPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                )
             }
             item(key = "basic") {
                 NutTavernGroupCard {
@@ -339,21 +437,26 @@ private fun CharacterEditScreenContent(
                             )
                         }
                         NutTavernGroupSection {
+                            val lorebooks by hiltViewModel<com.nuttavern.ui.viewmodel.LorebookViewModel>()
+                                .lorebooks.collectAsState()
+                            val characterLorebookName = draft.characterLorebookId?.let { id ->
+                                lorebooks.find { it.id == id }?.name?.ifBlank { "未命名世界书" }
+                            }
                             NutTavernIconRow(
                                 icon = Lucide.BookOpenText,
                                 title = "角色世界书",
-                                subtitle = if (draft.lorebookIds.isEmpty()) "未绑定"
-                                    else "已绑定 ${draft.lorebookIds.size} 本",
+                                subtitle = characterLorebookName ?: "未选择",
                                 showTrailingChevron = true,
-                                onClick = { showLorebookBindSheet = true },
+                                onClick = { showCharacterLorebookSheet = true },
                             )
                             NutTavernGroupDivider()
                             NutTavernIconRow(
                                 icon = Lucide.BookOpenText,
-                                title = "角色内嵌世界书",
-                                subtitle = characterBookSubtitle(draft.characterBook),
+                                title = "辅助世界书",
+                                subtitle = if (draft.lorebookIds.isEmpty()) "未选择"
+                                    else "已选择 ${draft.lorebookIds.size} 本",
                                 showTrailingChevron = true,
-                                onClick = { showCharacterBookEditor = true },
+                                onClick = { showAuxiliaryLorebookSheet = true },
                             )
                             NutTavernGroupDivider()
                             NutTavernIconRow(
@@ -365,11 +468,19 @@ private fun CharacterEditScreenContent(
                             )
                             NutTavernGroupDivider()
                             NutTavernIconRow(
-                                icon = Lucide.Tags,
-                                title = "导入 / 导出",
-                                subtitle = "PNG / JSON 导入导出后续接入",
+                                icon = Lucide.FileUp,
+                                title = "导出为图片",
+                                subtitle = "导出 PNG 角色卡(需已设置头像)",
                                 showTrailingChevron = true,
-                                onClick = { pendingNotice = "角色导入导出" },
+                                onClick = { onExportPng(normalizedDraft) },
+                            )
+                            NutTavernGroupDivider()
+                            NutTavernIconRow(
+                                icon = Lucide.FileUp,
+                                title = "导出为 JSON",
+                                subtitle = "导出 V3 角色卡 JSON",
+                                showTrailingChevron = true,
+                                onClick = { onExportJson(normalizedDraft) },
                             )
                         }
                     }
@@ -459,22 +570,33 @@ private fun CharacterEditScreenContent(
         )
     }
 
-    if (showCharacterBookEditor) {
-        CharacterLorebookEditor(
-            characterBook = draft.characterBook,
-            onChange = { next -> draft = draft.copy(characterBook = next) },
-            onBack = { showCharacterBookEditor = false },
+    if (showCharacterLorebookSheet) {
+        CharacterPrimaryLorebookSheet(
+            currentLorebookId = draft.characterLorebookId,
+            onSelect = { id ->
+                // 角色世界书不重复出现在辅助列表:选中时从 lorebookIds 剔除该 id
+                draft = draft.copy(
+                    characterLorebookId = id,
+                    lorebookIds = if (id == null) draft.lorebookIds else draft.lorebookIds - id,
+                )
+                showCharacterLorebookSheet = false
+            },
+            onDismiss = { showCharacterLorebookSheet = false },
         )
     }
 
-    if (showLorebookBindSheet) {
-        CharacterLorebookBindSheet(
-            boundIds = draft.lorebookIds.toSet(),
+    if (showAuxiliaryLorebookSheet) {
+        CharacterAuxiliaryLorebookSheet(
+            selectedIds = draft.lorebookIds.toSet(),
+            characterLorebookId = draft.characterLorebookId,
             onApply = { ids ->
-                draft = draft.copy(lorebookIds = ids.toList())
-                showLorebookBindSheet = false
+                // 角色世界书不进辅助列表:应用时剔除(防脏数据或并发选择导致的重复)
+                val primaryId = draft.characterLorebookId
+                val auxiliaryIds = if (primaryId == null) ids else ids - primaryId
+                draft = draft.copy(lorebookIds = auxiliaryIds.toList())
+                showAuxiliaryLorebookSheet = false
             },
-            onDismiss = { showLorebookBindSheet = false },
+            onDismiss = { showAuxiliaryLorebookSheet = false },
         )
     }
 }
@@ -489,7 +611,7 @@ private fun regexEntrySubtitle(scripts: List<com.nuttavern.data.regex.RegexScrip
 }
 
 @Composable
-private fun CharacterAvatarCard(onClick: () -> Unit) {
+private fun CharacterAvatarCard(avatarPath: String?, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -504,11 +626,24 @@ private fun CharacterAvatarCard(onClick: () -> Unit) {
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onClick,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Lucide.BookUser,
-                        contentDescription = "选择角色头像",
-                        modifier = Modifier.size(48.dp),
+                if (avatarPath.isNullOrBlank()) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Lucide.BookUser,
+                            contentDescription = "选择角色头像",
+                            modifier = Modifier.size(48.dp),
+                        )
+                    }
+                } else {
+                    val context = LocalContext.current
+                    val request = remember(context, avatarPath) {
+                        ImageRequest.Builder(context).data(File(avatarPath)).build()
+                    }
+                    AsyncImage(
+                        model = request,
+                        contentDescription = "更换角色头像",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
@@ -769,28 +904,77 @@ private fun VerbosityRow(
 }
 
 /**
- * "角色内嵌世界书"行的 subtitle 文案。
- */
-private fun characterBookSubtitle(book: com.nuttavern.data.character.CharacterBook?): String {
-    if (book == null || book.entries.isEmpty()) return "尚未添加,点击新增"
-    val enabled = book.entries.count { it.enabled }
-    return "共 ${book.entries.size} 条,启用 $enabled 条"
-}
-
-/**
- * 角色绑定世界书选择 Sheet。
+ * 角色世界书选择 Sheet(单选)。
+ *
+ * 对齐酒馆 primary 世界书(`character.data.extensions.world`):单选一本,运行时作为角色来源
+ * 参与激活扫描。选"无"清除。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CharacterLorebookBindSheet(
-    boundIds: Set<String>,
+private fun CharacterPrimaryLorebookSheet(
+    currentLorebookId: String?,
+    onSelect: (String?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val lorebookViewModel: com.nuttavern.ui.viewmodel.LorebookViewModel = hiltViewModel()
+    val lorebooks by lorebookViewModel.lorebooks.collectAsState()
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    androidx.compose.material3.ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f).padding(horizontal = 16.dp),
+        ) {
+            com.nuttavern.ui.components.NutTavernSheetTitle(
+                title = "角色世界书",
+                description = "选中的世界书随角色卡走,使用本角色时自动参与激活扫描",
+            )
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                item(key = "none") {
+                    NutTavernSelectableRow(
+                        title = "无",
+                        subtitle = "不设置角色世界书",
+                        selected = currentLorebookId == null,
+                        onClick = { onSelect(null) },
+                    )
+                }
+                items(lorebooks, key = { it.id }) { book ->
+                    NutTavernSelectableRow(
+                        title = book.name.ifBlank { "未命名世界书" },
+                        subtitle = "${book.entries.size} 条条目",
+                        selected = book.id == currentLorebookId,
+                        onClick = { onSelect(book.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 辅助世界书选择 Sheet(多选)。
+ *
+ * 对齐酒馆 additional 世界书(`charLore.extraBooks`):多选,运行时作为角色来源参与激活。
+ * 角色世界书(primary)那本强制勾选且不可取消——纯前端约束,primary 不重复写进辅助列表。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CharacterAuxiliaryLorebookSheet(
+    selectedIds: Set<String>,
+    characterLorebookId: String?,
     onApply: (Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val lorebookViewModel: com.nuttavern.ui.viewmodel.LorebookViewModel = hiltViewModel()
     val lorebooks by lorebookViewModel.lorebooks.collectAsState()
     val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var selectedIds by remember { mutableStateOf(boundIds) }
+    var pendingIds by remember { mutableStateOf(selectedIds) }
 
     androidx.compose.material3.ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -800,23 +984,38 @@ private fun CharacterLorebookBindSheet(
             modifier = Modifier.fillMaxWidth().fillMaxHeight(0.6f).padding(horizontal = 16.dp),
         ) {
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                com.nuttavern.ui.components.NutTavernSheetTitle(title = "绑定世界书", modifier = Modifier.weight(1f))
-                TextButton(onClick = { onApply(selectedIds) }) { Text("应用") }
+                com.nuttavern.ui.components.NutTavernSheetTitle(title = "辅助世界书", modifier = Modifier.weight(1f))
+                TextButton(onClick = { onApply(pendingIds) }) { Text("应用") }
             }
             if (lorebooks.isEmpty()) {
                 Text("暂无世界书,请先在设置中创建", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 24.dp))
             } else {
                 LazyColumn(modifier = Modifier.fillMaxWidth().weight(1f), contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(lorebooks, key = { it.id }) { book ->
+                        val isCharacterLorebook = book.id == characterLorebookId
                         com.nuttavern.ui.regex.MultiSelectPickerCard(
                             title = book.name.ifBlank { "未命名世界书" },
-                            subtitle = if (book.entries.isEmpty()) "暂无条目" else "共 ${book.entries.size} 个条目",
-                            enabled = book.id in selectedIds,
-                            onToggle = { enabled -> selectedIds = if (enabled) selectedIds + book.id else selectedIds - book.id },
+                            subtitle = if (isCharacterLorebook) "已是角色世界书"
+                                else if (book.entries.isEmpty()) "暂无条目" else "共 ${book.entries.size} 个条目",
+                            enabled = isCharacterLorebook || book.id in pendingIds,
+                            locked = isCharacterLorebook,
+                            onToggle = { enabled -> pendingIds = if (enabled) pendingIds + book.id else pendingIds - book.id },
                         )
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 从相册选中的图片 Uri 推断落盘扩展名(对齐 CharacterRepository 支持的扩展名)。
+ * 优先用 MIME 类型,无法识别时回退 png。
+ */
+private fun resolveAvatarExtension(context: android.content.Context, uri: android.net.Uri): String {
+    return when (context.contentResolver.getType(uri)) {
+        "image/jpeg" -> "jpg"
+        "image/webp" -> "webp"
+        else -> "png"
     }
 }

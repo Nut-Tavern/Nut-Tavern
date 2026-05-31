@@ -1,6 +1,9 @@
 ﻿package com.nuttavern.ui.persona
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,8 +42,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import coil3.compose.AsyncImage
+import coil3.request.ImageRequest
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.BookOpenText
 import com.composables.icons.lucide.BookUser
@@ -63,7 +70,10 @@ import com.nuttavern.ui.components.NutTavernLabeledTextField
 import com.nuttavern.ui.components.NutTavernNumericField
 import com.nuttavern.ui.components.NumericParser
 import com.nuttavern.ui.components.NutTavernShapeTokens
+import com.nuttavern.ui.viewmodel.CharacterViewModel
+import com.nuttavern.ui.viewmodel.LorebookViewModel
 import com.nuttavern.ui.viewmodel.UserPersonaViewModel
+import java.io.File
 import kotlinx.serialization.json.Json
 
 /**
@@ -98,6 +108,7 @@ fun UserPersonaEditScreen(
             },
             onDelete = onBack, // 新建草稿不会触发(allowDelete=false 已隐藏入口),回退兜底
             onBack = onBack,
+            onPersistAvatar = viewModel::persistAvatar,
         )
         return
     }
@@ -139,6 +150,7 @@ fun UserPersonaEditScreen(
             onBack()
         },
         onBack = onBack,
+        onPersistAvatar = viewModel::persistAvatar,
     )
 }
 
@@ -150,6 +162,9 @@ private fun UserPersonaEditScreenContent(
     onDelete: () -> Unit,
     onBack: () -> Unit,
     allowDelete: Boolean = true,
+    onPersistAvatar: (personaId: String, bytes: ByteArray, extension: String, onSaved: (String?) -> Unit) -> Unit = { _, _, _, onSaved -> onSaved(null) },
+    lorebookViewModel: LorebookViewModel = hiltViewModel(),
+    characterViewModel: CharacterViewModel = hiltViewModel(),
 ) {
     var draft by rememberSaveable(initial.id, stateSaver = UserPersonaSaver) {
         mutableStateOf(initial)
@@ -160,6 +175,8 @@ private fun UserPersonaEditScreenContent(
     var showFullScreenDescription by remember { mutableStateOf(false) }
     var showPositionSheet by remember { mutableStateOf(false) }
     var showRoleSheet by remember { mutableStateOf(false) }
+    var showLorebookBindSheet by remember { mutableStateOf(false) }
+    var showCharacterBindSheet by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var advancedExpanded by remember { mutableStateOf(false) }
@@ -170,6 +187,30 @@ private fun UserPersonaEditScreenContent(
         val name = pendingNotice ?: return@LaunchedEffect
         snackbarHostState.showSnackbar("$name 暂未接入")
         pendingNotice = null
+    }
+
+    val context = LocalContext.current
+    var pendingMessage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingMessage) {
+        val message = pendingMessage ?: return@LaunchedEffect
+        snackbarHostState.showSnackbar(message)
+        pendingMessage = null
+    }
+    val avatarPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri ?: return@rememberLauncherForActivityResult
+        val bytes = runCatching {
+            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull()
+        if (bytes == null || bytes.isEmpty()) {
+            pendingMessage = "头像读取失败,请重试"
+            return@rememberLauncherForActivityResult
+        }
+        val extension = resolveAvatarExtension(context, uri)
+        onPersistAvatar(draft.id, bytes, extension) { path ->
+            if (path != null) draft = draft.copy(avatarPath = path)
+        }
     }
 
     val triggerBack: () -> Unit = {
@@ -207,7 +248,14 @@ private fun UserPersonaEditScreenContent(
             verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
         ) {
             item(key = "avatar") {
-                AvatarCard(onClick = { pendingNotice = "头像功能" })
+                AvatarCard(
+                    avatarPath = draft.avatarPath,
+                    onClick = {
+                        avatarPicker.launch(
+                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                        )
+                    },
+                )
             }
             item(key = "basics") {
                 NutTavernGroupCard {
@@ -277,20 +325,29 @@ private fun UserPersonaEditScreenContent(
                             )
                         }
                         NutTavernGroupSection {
+                            val lorebooks by lorebookViewModel.lorebooks.collectAsState()
+                            val boundBookName = draft.lorebookId?.let { id ->
+                                lorebooks.find { it.id == id }?.name?.ifBlank { "未命名世界书" }
+                            }
                             NutTavernIconRow(
                                 icon = Lucide.BookOpenText,
                                 title = "绑定世界书",
-                                subtitle = "等世界书模块上线后启用",
+                                subtitle = boundBookName ?: "未绑定",
                                 showTrailingChevron = true,
-                                onClick = { pendingNotice = "世界书绑定" },
+                                onClick = { showLorebookBindSheet = true },
                             )
                             NutTavernGroupDivider()
+                            val characters by characterViewModel.characters.collectAsState()
+                            val connectionCount = draft.characterConnections.count { connId ->
+                                characters.any { it.id == connId }
+                            }
                             NutTavernIconRow(
                                 icon = Lucide.BookUser,
                                 title = "绑定角色",
-                                subtitle = "切到对应角色时自动启用本身份",
+                                subtitle = if (connectionCount > 0) "已绑定 $connectionCount 个角色"
+                                    else "未绑定",
                                 showTrailingChevron = true,
-                                onClick = { pendingNotice = "角色绑定" },
+                                onClick = { showCharacterBindSheet = true },
                             )
                         }
                     }
@@ -341,6 +398,26 @@ private fun UserPersonaEditScreenContent(
             showRoleSheet = false
         },
         onDismiss = { showRoleSheet = false },
+    )
+
+    PersonaLorebookBindSheet(
+        visible = showLorebookBindSheet,
+        currentLorebookId = draft.lorebookId,
+        onSelect = { selectedId ->
+            draft = draft.copy(lorebookId = selectedId)
+            showLorebookBindSheet = false
+        },
+        onDismiss = { showLorebookBindSheet = false },
+    )
+
+    PersonaCharacterBindSheet(
+        visible = showCharacterBindSheet,
+        currentConnections = draft.characterConnections,
+        onApply = { connections ->
+            draft = draft.copy(characterConnections = connections)
+            showCharacterBindSheet = false
+        },
+        onDismiss = { showCharacterBindSheet = false },
     )
 
     if (showDeleteDialog) {
@@ -401,7 +478,7 @@ private fun UserPersonaEditScreenContent(
  * 头像方框。当前阶段点击仅提示"头像功能尚未接入";后端阶段把回调改成"启动相册选择"即可。
  */
 @Composable
-private fun AvatarCard(onClick: () -> Unit) {
+private fun AvatarCard(avatarPath: String?, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -419,11 +496,24 @@ private fun AvatarCard(onClick: () -> Unit) {
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                 onClick = onClick,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        imageVector = Lucide.UserRound,
-                        contentDescription = "选择头像",
-                        modifier = Modifier.size(40.dp),
+                if (avatarPath.isNullOrBlank()) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Lucide.UserRound,
+                            contentDescription = "选择头像",
+                            modifier = Modifier.size(40.dp),
+                        )
+                    }
+                } else {
+                    val context = LocalContext.current
+                    val request = remember(context, avatarPath) {
+                        ImageRequest.Builder(context).data(File(avatarPath)).build()
+                    }
+                    AsyncImage(
+                        model = request,
+                        contentDescription = "更换头像",
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
             }
@@ -512,3 +602,15 @@ private val UserPersonaSaver: Saver<UserPersona, String> = Saver(
         }
     },
 )
+
+/**
+ * 从相册选中的图片 Uri 推断落盘扩展名(对齐 PersonaRepository 支持的扩展名)。
+ * 优先用 MIME 类型,无法识别时回退 png。
+ */
+private fun resolveAvatarExtension(context: android.content.Context, uri: android.net.Uri): String {
+    return when (context.contentResolver.getType(uri)) {
+        "image/jpeg" -> "jpg"
+        "image/webp" -> "webp"
+        else -> "png"
+    }
+}

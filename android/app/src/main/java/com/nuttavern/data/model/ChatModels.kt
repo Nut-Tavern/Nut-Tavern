@@ -37,6 +37,11 @@ data class ConversationSummary(
      */
     val enabledOrphanRegexIds: String? = null,
     val lorebookTimedEffectsJson: String = "{}",
+    /**
+     * 当前会话的思考量(reasoning effort)。会话级:切会话保留各自档位,关 app 不丢。
+     * null 等价 [ThinkingLevel.Auto]("自动",不向后端发送思考字段)。
+     */
+    val thinkingLevel: ThinkingLevel = ThinkingLevel.Auto,
 )
 
 data class Message(
@@ -45,12 +50,110 @@ data class Message(
     val content: String,
     val reasoningContent: String = "",
     val reasoningDurationMillis: Long = 0L,
+    /**
+     * 用户随消息发送的图片附件。空 = 纯文本消息(老消息、assistant 回复)。
+     * 二进制落 [filesDir],这里只引用路径,发请求时按 [ImageAttachment.path] 读文件转 base64。
+     */
+    val attachments: List<ImageAttachment> = emptyList(),
 )
 
-enum class ThinkingLevel(val label: String) {
+/**
+ * 一张随消息发送的图片附件。
+ *
+ * 二进制**不进数据库**:文件落 `filesDir/chat-images/{id}.{ext}`,这里只存路径 + mime,
+ * 发请求时读文件转 base64 拼进各家图片块。设计对齐角色头像([com.nuttavern.data.character.CharacterRepository.saveAvatarBytes])。
+ */
+@kotlinx.serialization.Serializable
+data class ImageAttachment(
+    /** 附件唯一 id,同时用作落盘文件名(不含扩展名)。 */
+    val id: String,
+    /** 图片文件绝对路径([filesDir] 下)。 */
+    val path: String,
+    /** MIME 类型,如 `image/jpeg` / `image/png` / `image/webp`。发请求时各家要用。 */
+    val mimeType: String,
+)
+
+
+/**
+ * 思考量(reasoning effort)。聊天页 8 个选项分别映射到这几种状态:
+ *
+ * - 关闭([Off])    → 显式不思考(各家用各自"关闭"写法)。
+ * - 自动([Auto])   → 不向后端发送任何思考字段,由模型自定(默认)。
+ * - 极低/低/中/高/极高([Effort]) → 努力度档位,映射到三家 reasoning 参数。
+ * - 自定义([Budget]) → 用户填具体 token 预算。
+ *
+ * 不对齐酒馆(酒馆无此粒度),参考其他客户端的思考量分档。各 Provider 的具体映射见
+ * [com.nuttavern.network.ThinkingLevelMapping]。
+ *
+ * # 持久化
+ *
+ * 会话级,落到 `conversations.thinkingLevel`(用 [serialize] / [parse] 在 String 间转换)。
+ * sealed 而非 enum,是因为"自定义 token"必须携带一个整数,enum 无法表达。
+ */
+sealed interface ThinkingLevel {
+    /** 关闭:显式要求不思考。 */
+    data object Off : ThinkingLevel
+
+    /** 自动:不发送思考字段,模型自行决定(默认值)。 */
+    data object Auto : ThinkingLevel
+
+    /** 努力度档位。 */
+    data class Effort(val tier: EffortTier) : ThinkingLevel
+
+    /** 自定义 token 预算。[tokens] 由 UI 校验为正整数。 */
+    data class Budget(val tokens: Int) : ThinkingLevel
+
+    companion object {
+        val Default: ThinkingLevel = Auto
+
+        /** 自定义 token 预算下限。UI 校验、反序列化共用,保证两处口径一致。 */
+        const val MIN_BUDGET_TOKENS = 128
+
+        /** 自定义 token 预算上限。 */
+        const val MAX_BUDGET_TOKENS = 65_536
+
+        /**
+         * 序列化成持久化字符串。格式:
+         * - `off` / `auto`
+         * - `effort:LOW` 等(枚举 name)
+         * - `budget:4096`
+         */
+        fun serialize(level: ThinkingLevel): String = when (level) {
+            Off -> "off"
+            Auto -> "auto"
+            is Effort -> "effort:${level.tier.name}"
+            is Budget -> "budget:${level.tokens}"
+        }
+
+        /** 反序列化;无法识别(含 null / 空 / 越界 budget)时退回 [Default]。 */
+        fun parse(raw: String?): ThinkingLevel {
+            val value = raw?.trim().orEmpty()
+            return when {
+                value == "off" -> Off
+                value == "auto" -> Auto
+                value.startsWith("effort:") -> {
+                    val tier = EffortTier.entries.firstOrNull { it.name == value.removePrefix("effort:") }
+                    tier?.let(ThinkingLevel::Effort) ?: Default
+                }
+                value.startsWith("budget:") -> {
+                    // 与 UI 校验同口径:越界(含被外部篡改的超大值)退回 Default,不下发非法预算。
+                    val tokens = value.removePrefix("budget:").toIntOrNull()
+                        ?.takeIf { it in MIN_BUDGET_TOKENS..MAX_BUDGET_TOKENS }
+                    tokens?.let(ThinkingLevel::Budget) ?: Default
+                }
+                else -> Default
+            }
+        }
+    }
+}
+
+/** 思考量努力度档位。5 档对齐聊天页选项"极低 / 低 / 中 / 高 / 极高"。 */
+enum class EffortTier(val label: String) {
+    MINIMAL("极低"),
     LOW("低"),
     MEDIUM("中"),
     HIGH("高"),
+    MAX("极高"),
 }
 
 enum class ChatRunMode(val label: String) {

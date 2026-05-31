@@ -41,10 +41,29 @@ data class Character(
      * V3 `extensions` 对象。当前不解释内容,避免提前绑定未落地扩展结构。
      */
     val extensions: JsonObject = EMPTY_JSON_OBJECT,
+    /**
+     * V3 `character_book` 内嵌世界书,导入导出携带位。
+     *
+     * 运行时**不再单独消费**:角色世界书重构后,对话激活只读 [characterLorebookId](角色世界书)
+     * 和 [lorebookIds](辅助世界书)指向的独立世界书。这个字段保留是为了角色卡导入导出
+     * round-trip——导入带 character_book 的 V3 卡时由导入链路提取成独立世界书并写 [characterLorebookId],
+     * 导出时再回填(对齐酒馆 importEmbeddedWorldInfo / convertWorldInfoToCharacterBook)。
+     */
     @SerialName("character_book") val characterBook: CharacterBook? = null,
     @SerialName("regex_scripts") val regexScripts: List<RegexScript> = emptyList(),
     val avatarPath: String? = null,
-    /** 绑定的全局世界书 id 列表。对话时这些世界书自动参与激活(除全局选中外)。 */
+    /**
+     * 角色世界书 id(单选)。对齐酒馆 primary 世界书 `character.data.extensions.world`,随卡走。
+     * 对话时这本世界书作为角色来源自动参与激活。null = 未选择。
+     */
+    val characterLorebookId: String? = null,
+    /**
+     * 辅助世界书 id 列表(多选)。对齐酒馆 additional 世界书(`world_info.charLore[].extraBooks`)。
+     *
+     * 酒馆 additional 是客户端全局设置按角色文件名匹配、不随卡走;本仓库角色用 UUID 无该匹配机制,
+     * 改为随卡存储。导出 V3 卡时辅助世界书不写进卡 JSON(酒馆卡本就不含 additional),不影响 round-trip。
+     * 对话时这些世界书作为角色来源自动参与激活(除全局选中外)。[characterLorebookId] 不重复出现在本列表。
+     */
     val lorebookIds: List<String> = emptyList(),
     /**
      * 回复长度档位。对齐酒馆 verbosity_levels(auto / low / medium / high)。
@@ -52,6 +71,15 @@ data class Character(
      * 透传给后端,无效值由后端拒绝。详见类 KDoc 顶部"非 V3 spec 字段"段。
      */
     val verbosity: String = "",
+    /**
+     * 导入 V3 卡时本仓库未建模的 data 顶层字段(如 `group_only_greetings` / `nickname` /
+     * `source` / `creation_date` 等),原样保留以保证导出 round-trip 不丢字段。
+     *
+     * 只存"未建模"的键:已建模字段(name / description / extensions / character_book 等)
+     * 不进这里,导出时由 [com.nuttavern.data.character.CharacterCardCodec] 用当前角色的
+     * 已建模字段覆盖,再合并本字段里的未建模键。null = 没有未建模字段(新建角色 / 老数据)。
+     */
+    val rawCardData: JsonObject? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
 ) {

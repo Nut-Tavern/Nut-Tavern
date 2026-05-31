@@ -8,7 +8,9 @@ import com.nuttavern.data.model.AssistantConfig
 import com.nuttavern.data.model.ChatRunMode
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.model.GeneratedContentSanitizer
+import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
+import com.nuttavern.data.model.Modality
 import com.nuttavern.data.model.Model
 import com.nuttavern.data.model.Provider
 import com.nuttavern.data.model.ThinkingLevel
@@ -17,6 +19,7 @@ import com.nuttavern.data.persona.PersonaRepository
 import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.preset.PresetRepository
+import com.nuttavern.data.preset.presetRegexScripts
 import com.nuttavern.data.regex.RegexPlacement
 import com.nuttavern.data.regex.RegexScriptRepository
 import com.nuttavern.data.local.SettingsDataStore
@@ -24,6 +27,7 @@ import com.nuttavern.data.repository.AssistantRepository
 import com.nuttavern.data.repository.ConversationRepository
 import com.nuttavern.data.repository.ProviderRepository
 import com.nuttavern.network.ChatApiClient
+import com.nuttavern.network.ChatImage
 import com.nuttavern.network.ChatMessage
 import com.nuttavern.prompt.HistoryMessage
 import com.nuttavern.prompt.PromptComposer
@@ -44,6 +48,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.decodeFromString
@@ -54,6 +59,21 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 
 private const val MAX_CONVERSATION_TITLE_LENGTH = 80
 private val lorebookTimedEffectJson = Json { ignoreUnknownKeys = true }
+
+/** 单张图片字节上限(原图直发不压缩,超限直接拒绝)。Claude 限 5MB/图,取保守值。 */
+private const val MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
+/** 只发图无文字时,新会话标题种子的兜底。 */
+private const val ATTACHMENT_ONLY_TITLE_SEED = "[图片]"
+
+/** 支持的图片 MIME → 落盘扩展名。三家通用集合的交集。 */
+private fun imageExtensionForMime(mimeType: String): String? = when (mimeType.lowercase()) {
+    "image/jpeg", "image/jpg" -> "jpg"
+    "image/png" -> "png"
+    "image/webp" -> "webp"
+    "image/gif" -> "gif"
+    else -> null
+}
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
@@ -94,14 +114,25 @@ class ChatViewModel @Inject constructor(
     private val _draft = MutableStateFlow("")
     val draft: StateFlow<String> = _draft.asStateFlow()
 
+    /**
+     * 待发送的图片附件(用户在 Composer 选了图但还没点发送)。发送成功后清空。
+     * 二进制已落盘([ImageAttachment.path]),这里只持有元数据引用。
+     */
+    private val _pendingAttachments = MutableStateFlow<List<ImageAttachment>>(emptyList())
+    val pendingAttachments: StateFlow<List<ImageAttachment>> = _pendingAttachments.asStateFlow()
+
     private val _chatRunMode = MutableStateFlow(ChatRunMode.CHAT)
     val chatRunMode: StateFlow<ChatRunMode> = _chatRunMode.asStateFlow()
 
     private val _workspaceAccessMode = MutableStateFlow(WorkspaceAccessMode.NO_WORKSPACE)
     val workspaceAccessMode: StateFlow<WorkspaceAccessMode> = _workspaceAccessMode.asStateFlow()
 
-    private val _draftThinkingLevel = MutableStateFlow(ThinkingLevel.MEDIUM)
-    val draftThinkingLevel: StateFlow<ThinkingLevel> = _draftThinkingLevel.asStateFlow()
+    /**
+     * 当前会话的思考量。会话级:切会话同步成该会话持久化的 thinkingLevel,切档位写回会话表。
+     * `null` 不出现在这里——加载 / 创建会话时都会落到一个明确档位,默认 [ThinkingLevel.Default]。
+     */
+    private val _currentThinkingLevel = MutableStateFlow<ThinkingLevel>(ThinkingLevel.Default)
+    val currentThinkingLevel: StateFlow<ThinkingLevel> = _currentThinkingLevel.asStateFlow()
 
     private val _streamingConversationId = MutableStateFlow<String?>(null)
     val streamingConversationId: StateFlow<String?> = _streamingConversationId.asStateFlow()
@@ -314,6 +345,7 @@ class ChatViewModel @Inject constructor(
                     _currentCharacterId.value = nextConversation.characterId
                     _currentPersonaId.value = nextConversation.personaId
                     _currentPresetId.value = nextConversation.presetId
+                    _currentThinkingLevel.value = nextConversation.thinkingLevel
                 } else {
                     _currentMessages.value = emptyList()
                 }
@@ -369,19 +401,21 @@ class ChatViewModel @Inject constructor(
             applyRestoredChatState(saved, firstConversations)
             hasRestoredFromPersistence = true
         }
-        // 当前会话 / 角色 / 身份 / 预设变化时立即写回持久化,关 app 不丢占位态。
+        // 当前会话 / 角色 / 身份 / 预设 / 思考量变化时立即写回持久化,关 app 不丢占位态。
         viewModelScope.launch {
             kotlinx.coroutines.flow.combine(
                 _currentConversationId,
                 _currentCharacterId,
                 _currentPersonaId,
                 _currentPresetId,
-            ) { conversationId, characterId, personaId, presetId ->
+                _currentThinkingLevel,
+            ) { conversationId, characterId, personaId, presetId, thinkingLevel ->
                 SettingsDataStore.LastChatState(
                     conversationId = conversationId.takeIf { it.isNotBlank() },
                     characterId = characterId,
                     personaId = personaId,
                     presetId = presetId,
+                    thinkingLevel = ThinkingLevel.serialize(thinkingLevel),
                 )
             }.collect { state ->
                 if (hasRestoredFromPersistence) {
@@ -413,6 +447,7 @@ class ChatViewModel @Inject constructor(
             _currentCharacterId.value = savedConversation.characterId
             _currentPersonaId.value = savedConversation.personaId
             _currentPresetId.value = savedConversation.presetId
+            _currentThinkingLevel.value = savedConversation.thinkingLevel
             return
         }
 
@@ -425,6 +460,7 @@ class ChatViewModel @Inject constructor(
             _currentCharacterId.value = saved.characterId
             _currentPersonaId.value = saved.personaId
             _currentPresetId.value = saved.presetId
+            _currentThinkingLevel.value = ThinkingLevel.parse(saved.thinkingLevel)
             _currentMessages.value = emptyList()
             return
         }
@@ -436,16 +472,62 @@ class ChatViewModel @Inject constructor(
             _currentCharacterId.value = nextConversation.characterId
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
+            _currentThinkingLevel.value = nextConversation.thinkingLevel
         } else {
             _currentMessages.value = emptyList()
         }
+    }
+
+    /**
+     * 把用户选中的图片字节存为待发附件。UI 读 URI→bytes→mime 后调用(IO 在 UI 协程里做)。
+     *
+     * 超过 [MAX_IMAGE_BYTES] 的图直接拒绝并给错误提示(原图直发,不压缩),避免请求体过大被后端拒。
+     * 当前模型不支持图片输入时也拒绝。落盘走 [ConversationRepository.saveImageBytes]。
+     */
+    fun addImageAttachment(bytes: ByteArray, mimeType: String) {
+        if (!isImageInputSupported()) {
+            _errorMessage.value = "当前模型不支持图片输入"
+            return
+        }
+        if (bytes.size > MAX_IMAGE_BYTES) {
+            _errorMessage.value = "图片过大,单张不能超过 ${MAX_IMAGE_BYTES / (1024 * 1024)} MB"
+            return
+        }
+        val extension = imageExtensionForMime(mimeType)
+        if (extension == null) {
+            _errorMessage.value = "不支持的图片格式"
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val attachmentId = createMessageId("img")
+            val path = runCatching {
+                conversationRepository.saveImageBytes(attachmentId, bytes, extension)
+            }.getOrNull()
+            if (path == null) {
+                _errorMessage.value = "图片保存失败"
+                return@launch
+            }
+            _pendingAttachments.update { it + ImageAttachment(attachmentId, path, mimeType) }
+        }
+    }
+
+    /** 移除一个待发附件(用户在 Composer 预览里点删除)。已落盘文件留着,孤儿文件影响可忽略。 */
+    fun removeImageAttachment(attachmentId: String) {
+        _pendingAttachments.update { list -> list.filterNot { it.id == attachmentId } }
+    }
+
+    /** 当前模型是否支持图片输入(inputModalities 含 IMAGE)。UI 据此启用/禁用选图入口。 */
+    fun isImageInputSupported(): Boolean {
+        return _currentModel.value?.inputModalities?.contains(Modality.IMAGE) == true
     }
 
     fun sendMessage(text: String) {
         if (_isReplying.value) return
 
         val trimmedText = text.trim()
-        if (trimmedText.isBlank()) return
+        val attachments = _pendingAttachments.value
+        // 纯文本且无附件才拦截;带图可以只发图不带文字。
+        if (trimmedText.isBlank() && attachments.isEmpty()) return
 
         _draft.value = ""
         _isReplying.value = true
@@ -454,7 +536,7 @@ class ChatViewModel @Inject constructor(
             var conversationId = ""
             try {
                 val createdAt = System.currentTimeMillis()
-                conversationId = ensureCurrentConversation(trimmedText, createdAt)
+                conversationId = ensureCurrentConversation(trimmedText.ifBlank { ATTACHMENT_ONLY_TITLE_SEED }, createdAt)
                 // USER_INPUT 改文件场景:对齐酒馆 sendMessageAsUser 的 getRegexedString 调用,
                 // 落库前跑一次 USER_INPUT 正则,只跑两个 Ephemerality 都不勾的脚本(永久改写)。
                 // 短暂模式(promptOnly=true)的脚本在 PromptComposer A0 阶段再跑。
@@ -466,8 +548,10 @@ class ChatViewModel @Inject constructor(
                     id = createMessageId("user"),
                     role = "user",
                     content = persistedUserText,
+                    attachments = attachments,
                 )
                 appendMessage(conversationId, userMessage, createdAt)
+                _pendingAttachments.value = emptyList()
                 refreshConversationTime(conversationId, createdAt)
 
                 providerRepository.initialize()
@@ -513,7 +597,7 @@ class ChatViewModel @Inject constructor(
                     model = model,
                     messages = prepared.messages,
                     systemPrompt = prepared.systemPrompt,
-                    thinkingLevel = _draftThinkingLevel.value,
+                    thinkingLevel = _currentThinkingLevel.value,
                     generationParams = prepared.generationParams,
                 ).collect { chunk ->
                     when {
@@ -584,6 +668,7 @@ class ChatViewModel @Inject constructor(
         _currentCharacterId.value = conversation.characterId
         _currentPersonaId.value = conversation.personaId
         _currentPresetId.value = conversation.presetId
+        _currentThinkingLevel.value = conversation.thinkingLevel
         _draft.value = ""
     }
 
@@ -594,11 +679,13 @@ class ChatViewModel @Inject constructor(
      * **保留** [currentCharacterId]:用户开新会话前已经选好的角色,在新会话里继续生效。
      * **重置** [currentPersonaId] / [currentPresetId] **为当前默认值**:与酒馆"新会话默认 = 全局默认"
      * 行为一致,用户在抽屉里改身份 / 预设会立即写到新建出来的会话上。
+     * **重置** [currentThinkingLevel] **为默认**([ThinkingLevel.Default]):新会话默认"自动"。
      */
     fun startNewConversation() {
         _currentConversationId.value = ""
         _currentMessages.value = emptyList()
         _draft.value = ""
+        _currentThinkingLevel.value = ThinkingLevel.Default
         viewModelScope.launch {
             _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
             _currentPresetId.value = resolveDefaultPresetId()
@@ -760,8 +847,30 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun selectDraftThinkingLevel(level: ThinkingLevel) {
-        _draftThinkingLevel.value = level
+    /**
+     * 切换当前会话思考量:
+     *
+     * - 当前已经在某个会话里 → 把会话表的 thinkingLevel 直接覆盖,落库;
+     * - 当前是"新会话"占位状态 → 只更新内存里的 [currentThinkingLevel],等创建会话时落库。
+     *
+     * 与 [selectPresetForCurrentConversation] 同模式:会话级,切档位不影响其他会话。
+     */
+    fun selectThinkingLevel(level: ThinkingLevel) {
+        _currentThinkingLevel.value = level
+
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
+
+        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        if (conversation.thinkingLevel == level) return
+
+        viewModelScope.launch {
+            val updated = conversation.copy(thinkingLevel = level)
+            conversationRepository.updateConversation(updated)
+            _conversationList.update { list ->
+                list.map { if (it.id == conversationId) updated else it }
+            }
+        }
     }
 
     fun clearError() {
@@ -920,6 +1029,7 @@ class ChatViewModel @Inject constructor(
         // 状态切了对应字段才会偏离默认。
         val personaId = _currentPersonaId.value ?: resolveDefaultPersonaIdOrNull()
         val presetId = _currentPresetId.value ?: resolveDefaultPresetId()
+        val thinkingLevel = _currentThinkingLevel.value
         val enabledRegexGroupIds = snapshotEnabledRegexGroupIdsJson()
         val enabledOrphanRegexIds = snapshotEnabledOrphanRegexIdsJson()
         val newConversationId = "conv-${System.currentTimeMillis()}"
@@ -935,6 +1045,7 @@ class ChatViewModel @Inject constructor(
             presetId = presetId,
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
+            thinkingLevel = thinkingLevel,
         )
 
         conversationRepository.createConversation(conversation, createdAt)
@@ -943,6 +1054,7 @@ class ChatViewModel @Inject constructor(
         _currentConversationId.value = newConversationId
         _currentPersonaId.value = personaId
         _currentPresetId.value = presetId
+        _currentThinkingLevel.value = thinkingLevel
         _currentMessages.value = emptyList()
 
         // 角色绑定时插入 greeting 作为新会话的首条 assistant 消息(对齐酒馆 first_mes 行为)。
@@ -996,7 +1108,13 @@ class ChatViewModel @Inject constructor(
             return
         }
 
+        // 同步切到 next 会话锁定的 character / persona / preset / thinkingLevel,与 selectConversation
+        // 一致;否则删当前会话回落后这几项仍停留在已删会话,UI 显示错值。
         _currentConversationId.value = nextConversation.id
+        _currentCharacterId.value = nextConversation.characterId
+        _currentPersonaId.value = nextConversation.personaId
+        _currentPresetId.value = nextConversation.presetId
+        _currentThinkingLevel.value = nextConversation.thinkingLevel
         _draft.value = ""
         _isReplying.value = false
     }
@@ -1029,6 +1147,7 @@ class ChatViewModel @Inject constructor(
             _currentCharacterId.value = nextConversation.characterId
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
+            _currentThinkingLevel.value = nextConversation.thinkingLevel
         }
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -1104,7 +1223,7 @@ class ChatViewModel @Inject constructor(
             conversation.enabledRegexGroupIds,
             conversation.enabledOrphanRegexIds,
         )
-        val presetScripts = extractPresetRegexScripts(preset)
+        val presetScripts = preset.presetRegexScripts()
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         return regexEngine.getRegexedString(
@@ -1136,7 +1255,7 @@ class ChatViewModel @Inject constructor(
             conversation.enabledRegexGroupIds,
             conversation.enabledOrphanRegexIds,
         )
-        val presetScripts = extractPresetRegexScripts(preset)
+        val presetScripts = preset.presetRegexScripts()
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         return regexEngine.getRegexedString(
@@ -1158,16 +1277,6 @@ class ChatViewModel @Inject constructor(
      * 都从本 helper 取,保证口径一致。
      */
     private fun currentRegexScopeFlags(): Pair<Boolean, Boolean> = true to true
-
-    /**
-     * 从 [Preset.extensions] 解出 `regex_scripts`。与 PromptComposer 同口径,失败返回空列表。
-     */
-    private fun extractPresetRegexScripts(preset: Preset): List<com.nuttavern.data.regex.RegexScript> {
-        val node = preset.extensions["regex_scripts"] ?: return emptyList()
-        return runCatching {
-            REGEX_PRESET_JSON.decodeFromJsonElement(REGEX_PRESET_LIST_SERIALIZER, node)
-        }.getOrDefault(emptyList())
-    }
 
     /**
      * 按会话引用的正则 id 列表展开启用的规则列表。
@@ -1330,7 +1439,7 @@ class ChatViewModel @Inject constructor(
             model = model,
             messages = prepared.messages,
             systemPrompt = prepared.systemPrompt,
-            thinkingLevel = _draftThinkingLevel.value,
+            thinkingLevel = _currentThinkingLevel.value,
             generationParams = prepared.generationParams,
         ).collect { chunk ->
             when {
@@ -1368,6 +1477,19 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
+     * 把消息的图片附件读成 base64,供拼接管线透传到请求体。文件读不出(被删 / 损坏)的附件跳过。
+     * 只在图片注入门控通过时调用(模型支持 IMAGE + 预设 media_inlining 开)。
+     */
+    private fun encodeAttachmentsForRequest(attachments: List<ImageAttachment>): List<ChatImage> {
+        if (attachments.isEmpty()) return emptyList()
+        return attachments.mapNotNull { attachment ->
+            val bytes = conversationRepository.readImageBytes(attachment.path) ?: return@mapNotNull null
+            val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+            ChatImage(base64Data = base64, mimeType = attachment.mimeType)
+        }
+    }
+
+    /**
      * 取当前会话的 PromptComposer 输入快照。
      *
      * 角色绑定:[ConversationSummary.characterId] 是会话创建时锁定的角色,后续切角色不会改写。
@@ -1391,15 +1513,24 @@ class ChatViewModel @Inject constructor(
 
         val persona = conversation?.personaId?.let { id -> findPersonaById(id) }
         val preset = resolvePresetForConversation(conversation?.presetId)
+        // 图片注入门控:模型支持 IMAGE 输入 + 预设 media_inlining 开。任一不满足则只发文本,
+        // 附件元数据仍保留在消息上(气泡照常显示图),只是不拼进请求体。
+        val allowImageInlining = isImageInputSupported() && preset.mediaInlining
         val history = _messagesByConversationId.value[conversationId].orEmpty()
-            .map { HistoryMessage(role = it.role, content = it.content) }
+            .map { message ->
+                HistoryMessage(
+                    role = message.role,
+                    content = message.content,
+                    images = if (allowImageInlining) encodeAttachmentsForRequest(message.attachments) else emptyList(),
+                )
+            }
         val globalRegexScripts = resolveRegexScriptsForConversation(
             conversation?.enabledRegexGroupIds,
             conversation?.enabledOrphanRegexIds,
         )
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
-        // 世界书激活:合并全局选中 + 角色内嵌世界书
+        // 世界书激活:合并全局选中 + 角色世界书/辅助世界书 + persona 世界书
         val lorebookResult = runLorebookActivation(conversation, history, character, preset, persona)
 
         return PromptComposerInput(
@@ -1416,7 +1547,7 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
-     * 执行世界书激活扫描。合并全局选中的世界书 + 角色内嵌世界书。
+     * 执行世界书激活扫描。合并全局选中的世界书 + 角色世界书/辅助世界书 + persona 世界书。
      */
     private suspend fun runLorebookActivation(
         conversation: ConversationSummary?,
@@ -1429,72 +1560,30 @@ class ChatViewModel @Inject constructor(
         val allBooks = lorebookRepository.lorebooks.first()
         val selectedBooks = allBooks.filter { it.id in globalSelectedIds }
 
-        // 角色内嵌世界书转换为 Lorebook 格式
-        val characterBook = character?.characterBook?.let { cb ->
-            com.nuttavern.data.lorebook.Lorebook(
-                id = "__character_book__",
-                name = cb.name ?: "角色内嵌世界书",
-                scanDepth = cb.scanDepth ?: 2,
-                tokenBudget = cb.tokenBudget ?: 25,
-                recursiveScanning = cb.recursiveScanning ?: false,
-                entries = cb.entries.mapIndexed { index, entry ->
-                    com.nuttavern.data.lorebook.LorebookEntry(
-                        uid = entry.id ?: index,
-                        key = entry.keys,
-                        keysecondary = entry.secondaryKeys,
-                        comment = entry.comment ?: entry.name ?: "",
-                        content = entry.content,
-                        constant = entry.isConstant ?: false,
-                        selective = entry.selective ?: true,
-                        selectiveLogic = entry.selectiveLogic ?: com.nuttavern.data.lorebook.SelectiveLogic.AND_ANY,
-                        order = entry.insertionOrder,
-                        position = entry.position?.toIntOrNull() ?: com.nuttavern.data.lorebook.WiPosition.BEFORE,
-                        disable = !entry.enabled,
-                        depth = entry.depth ?: com.nuttavern.data.lorebook.LorebookEntry.DEFAULT_DEPTH,
-                        role = entry.role?.toIntOrNull() ?: com.nuttavern.data.lorebook.WiRole.SYSTEM,
-                        group = entry.group ?: "",
-                        groupOverride = entry.groupOverride ?: false,
-                        groupWeight = entry.groupWeight ?: com.nuttavern.data.lorebook.LorebookEntry.DEFAULT_WEIGHT,
-                        entryScanDepth = entry.entryScanDepth,
-                        entryCaseSensitive = entry.entryCaseSensitive,
-                        entryMatchWholeWords = entry.matchWholeWords,
-                        probability = entry.probability ?: 100,
-                        useProbability = entry.useProbability ?: true,
-                        sticky = entry.sticky,
-                        cooldown = entry.cooldown,
-                        delay = entry.delay,
-                        excludeRecursion = entry.excludeRecursion ?: false,
-                        preventRecursion = entry.preventRecursion ?: false,
-                        delayUntilRecursion = entry.delayUntilRecursion ?: 0,
-                        ignoreBudget = entry.ignoreBudget ?: false,
-                        addMemo = entry.addMemo ?: false,
-                        entryUseGroupScoring = entry.useGroupScoring,
-                        matchPersonaDescription = entry.matchPersonaDescription ?: false,
-                        matchCharacterDescription = entry.matchCharacterDescription ?: false,
-                        matchCharacterPersonality = entry.matchCharacterPersonality ?: false,
-                        matchCharacterDepthPrompt = entry.matchCharacterDepthPrompt ?: false,
-                        matchScenario = entry.matchScenario ?: false,
-                        matchCreatorNotes = entry.matchCreatorNotes ?: false,
-                        characterFilter = entry.characterFilter,
-                        vectorized = entry.vectorized ?: false,
-                        automationId = entry.automationId ?: "",
-                    )
-                },
-            )
-        }
-
         val taggedLorebooks = buildList {
-            if (characterBook != null) {
-                add(
-                    com.nuttavern.lorebook.TaggedLorebook(
-                        book = characterBook,
-                        isCharacterSource = true,
-                        sourceKey = "character:${character?.id.orEmpty()}:embedded",
-                    )
-                )
+            // Persona lorebook(优先级最高,对齐酒馆 persona lore > global + character)
+            // 去重:如果 persona lorebook 已作为全局 WI 或角色来源 WI 激活,跳过
+            val personaLorebookId = persona?.lorebookId
+            // 角色来源世界书 id:角色世界书(primary,单本) + 辅助世界书(additional,多本)
+            val characterBoundIds = buildSet {
+                character?.characterLorebookId?.let { add(it) }
+                addAll(character?.lorebookIds.orEmpty())
             }
-            // 角色绑定的全局世界书(isCharacterSource = true)
-            val characterBoundIds = character?.lorebookIds.orEmpty().toSet()
+            if (personaLorebookId != null
+                && personaLorebookId !in globalSelectedIds
+                && personaLorebookId !in characterBoundIds
+            ) {
+                allBooks.find { it.id == personaLorebookId }?.let { personaBook ->
+                    add(
+                        com.nuttavern.lorebook.TaggedLorebook(
+                            book = personaBook,
+                            isCharacterSource = false,
+                            sourceKey = "persona:${personaLorebookId}",
+                        )
+                    )
+                }
+            }
+            // 角色来源世界书(角色世界书 + 辅助世界书,isCharacterSource = true)
             for (book in allBooks) {
                 if (book.id in characterBoundIds) {
                     add(
@@ -1506,9 +1595,9 @@ class ChatViewModel @Inject constructor(
                     )
                 }
             }
-            // 全局选中的世界书(排除已作为角色绑定加入的)
+            // 全局选中的世界书(排除已作为角色绑定或 persona 绑定加入的)
             for (book in selectedBooks) {
-                if (book.id !in characterBoundIds) {
+                if (book.id !in characterBoundIds && book.id != personaLorebookId) {
                     add(
                         com.nuttavern.lorebook.TaggedLorebook(
                             book = book,
@@ -1819,15 +1908,5 @@ class ChatViewModel @Inject constructor(
                     }
                 }
         }
-    }
-
-    private companion object {
-        /** 解析 [Preset.extensions] 里的 `regex_scripts` 节点用,与 PromptComposer 同口径。 */
-        val REGEX_PRESET_JSON = kotlinx.serialization.json.Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        }
-        val REGEX_PRESET_LIST_SERIALIZER =
-            kotlinx.serialization.builtins.ListSerializer(com.nuttavern.data.regex.RegexScript.serializer())
     }
 }

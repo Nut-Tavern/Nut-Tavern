@@ -36,6 +36,7 @@ class SettingsDataStore @Inject constructor(
         val KEY_LAST_CHARACTER_ID = stringPreferencesKey("last_character_id")
         val KEY_LAST_PERSONA_ID = stringPreferencesKey("last_persona_id")
         val KEY_LAST_PRESET_ID = stringPreferencesKey("last_preset_id")
+        val KEY_LAST_THINKING_LEVEL = stringPreferencesKey("last_thinking_level")
     }
 
     suspend fun getAssistants(): List<AssistantConfig> {
@@ -100,6 +101,8 @@ class SettingsDataStore @Inject constructor(
         val characterId: String?,
         val personaId: String?,
         val presetId: String?,
+        /** 上次会话思考量(序列化字符串,见 [com.nuttavern.data.model.ThinkingLevel.serialize])。 */
+        val thinkingLevel: String?,
     )
 
     suspend fun getLastChatState(): LastChatState {
@@ -109,6 +112,7 @@ class SettingsDataStore @Inject constructor(
             characterId = prefs[KEY_LAST_CHARACTER_ID]?.takeIf { it.isNotBlank() },
             personaId = prefs[KEY_LAST_PERSONA_ID]?.takeIf { it.isNotBlank() },
             presetId = prefs[KEY_LAST_PRESET_ID]?.takeIf { it.isNotBlank() },
+            thinkingLevel = prefs[KEY_LAST_THINKING_LEVEL]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -118,6 +122,7 @@ class SettingsDataStore @Inject constructor(
             putOrRemove(prefs, KEY_LAST_CHARACTER_ID, state.characterId)
             putOrRemove(prefs, KEY_LAST_PERSONA_ID, state.personaId)
             putOrRemove(prefs, KEY_LAST_PRESET_ID, state.presetId)
+            putOrRemove(prefs, KEY_LAST_THINKING_LEVEL, state.thinkingLevel)
         }
     }
 

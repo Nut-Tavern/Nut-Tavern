@@ -66,7 +66,9 @@ fun ChatScreen(
     val currentProvider by viewModel.currentProvider.collectAsState()
     val currentModel by viewModel.currentModel.collectAsState()
     val availableProviders by viewModel.availableProviders.collectAsState()
-    val draftThinkingLevel by viewModel.draftThinkingLevel.collectAsState()
+    val currentThinkingLevel by viewModel.currentThinkingLevel.collectAsState()
+    val pendingAttachments by viewModel.pendingAttachments.collectAsState()
+    val imageInputSupported = currentModel?.inputModalities?.contains(com.nuttavern.data.model.Modality.IMAGE) == true
     val clipboardMessage by viewModel.clipboardMessage.collectAsState()
     val currentCharacter by viewModel.currentCharacter.collectAsState()
     val currentCharacterId by viewModel.currentCharacterId.collectAsState()
@@ -219,7 +221,11 @@ fun ChatScreen(
                         draft = draft,
                         currentProvider = currentProvider,
                         currentModel = currentModel,
-                        draftThinkingLevel = draftThinkingLevel,
+                        currentThinkingLevel = currentThinkingLevel,
+                        pendingAttachments = pendingAttachments,
+                        imageInputSupported = imageInputSupported,
+                        onAddImage = viewModel::addImageAttachment,
+                        onRemoveImage = viewModel::removeImageAttachment,
                         onOpenConversationDrawer = {
                             coroutineScope.launch { conversationDrawerState.open() }
                         },
@@ -237,7 +243,7 @@ fun ChatScreen(
                         onDraftChange = viewModel::updateDraft,
                         onSendDraft = viewModel::sendMessage,
                         onStopGeneration = viewModel::stopGeneration,
-                        onSelectThinkingLevel = viewModel::selectDraftThinkingLevel,
+                        onSelectThinkingLevel = viewModel::selectThinkingLevel,
                     )
                 }
             }
@@ -412,7 +418,11 @@ private fun ChatScreenContent(
     draft: String,
     currentProvider: com.nuttavern.data.model.Provider?,
     currentModel: com.nuttavern.data.model.Model?,
-    draftThinkingLevel: com.nuttavern.data.model.ThinkingLevel,
+    currentThinkingLevel: com.nuttavern.data.model.ThinkingLevel,
+    pendingAttachments: List<com.nuttavern.data.model.ImageAttachment>,
+    imageInputSupported: Boolean,
+    onAddImage: (ByteArray, String) -> Unit,
+    onRemoveImage: (String) -> Unit,
     onOpenConversationDrawer: () -> Unit,
     onOpenSettingsDrawer: () -> Unit,
     onCopyMessage: (Message) -> Unit,
@@ -469,7 +479,11 @@ private fun ChatScreenContent(
                 isReplying = isReplying,
                 currentProvider = currentProvider,
                 currentModelName = currentModel?.modelId.orEmpty(),
-                draftThinkingLevel = draftThinkingLevel,
+                currentThinkingLevel = currentThinkingLevel,
+                pendingAttachments = pendingAttachments,
+                imageInputSupported = imageInputSupported,
+                onAddImage = onAddImage,
+                onRemoveImage = onRemoveImage,
                 onOpenModelPicker = onOpenModelPicker,
                 onDraftChange = onDraftChange,
                 onSendDraft = onSendDraft,

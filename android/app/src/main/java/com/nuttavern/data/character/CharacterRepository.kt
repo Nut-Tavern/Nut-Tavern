@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 
 @Singleton
 class CharacterRepository @Inject constructor(
@@ -60,6 +61,7 @@ class CharacterRepository @Inject constructor(
 
     suspend fun delete(id: String) {
         characterDao.deleteById(id)
+        deleteAvatarFiles(id)
     }
 
     /**
@@ -72,6 +74,10 @@ class CharacterRepository @Inject constructor(
 
     fun avatarFileFor(characterId: String, extension: String = DEFAULT_AVATAR_EXTENSION): File {
         require(characterId.isNotBlank()) { "Character id must not be blank." }
+        // 头像文件名直接用 characterId 拼,必须拒绝路径分隔符 / 上跳,防止写到私有目录外。
+        require(characterId.none { it == '/' || it == '\\' } && !characterId.contains("..")) {
+            "Character id must not contain path separators."
+        }
         val safeExtension = extension.trim().trimStart('.').lowercase()
         require(safeExtension in SUPPORTED_AVATAR_EXTENSIONS) {
             "Unsupported character avatar extension: $extension"
@@ -81,6 +87,45 @@ class CharacterRepository @Inject constructor(
 
     fun characterAvatarDirectory(): File {
         return File(context.filesDir, CHARACTER_AVATAR_DIRECTORY)
+    }
+
+    /**
+     * 把头像字节写入 [filesDir]/characters/{id}.{ext},返回可存进 [Character.avatarPath] 的绝对路径。
+     *
+     * 角色卡导入用:V3 PNG 卡的头像就是卡本身的图像字节,需落盘后导出 PNG 才有底图。
+     * 同一角色换头像时,先清掉其它扩展名的旧文件,避免残留(导入 png 后又换 jpg 等)。
+     *
+     * @throws IllegalArgumentException 扩展名不在 [SUPPORTED_AVATAR_EXTENSIONS] 时抛出
+     */
+    fun saveAvatarBytes(characterId: String, bytes: ByteArray, extension: String): String {
+        val target = avatarFileFor(characterId, extension)
+        target.parentFile?.mkdirs()
+        deleteAvatarFilesExcept(characterId, target)
+        target.writeBytes(bytes)
+        return target.absolutePath
+    }
+
+    /** 读出角色头像字节;文件不存在返回 null(导出 PNG 时用作底图)。 */
+    fun readAvatarBytes(avatarPath: String?): ByteArray? {
+        val path = avatarPath?.takeIf { it.isNotBlank() } ?: return null
+        val file = File(path)
+        return if (file.exists()) file.readBytes() else null
+    }
+
+    private fun deleteAvatarFilesExcept(characterId: String, keep: File) {
+        SUPPORTED_AVATAR_EXTENSIONS.forEach { ext ->
+            val file = File(characterAvatarDirectory(), "$characterId.$ext")
+            if (file != keep && file.exists()) file.delete()
+        }
+    }
+
+    /** 删除角色时清理它的全部头像文件(各扩展名),避免私有目录残留孤儿文件。 */
+    private fun deleteAvatarFiles(characterId: String) {
+        if (characterId.any { it == '/' || it == '\\' } || characterId.contains("..")) return
+        SUPPORTED_AVATAR_EXTENSIONS.forEach { ext ->
+            val file = File(characterAvatarDirectory(), "$characterId.$ext")
+            if (file.exists()) file.delete()
+        }
     }
 
     private fun CharacterEntity.toCharacter(): Character {
@@ -107,7 +152,9 @@ class CharacterRepository @Inject constructor(
             avatarPath = avatarPath,
             lorebookIds = lorebookIdsJson.takeIf { it.isNotBlank() }?.let { json.decodeFromString<List<String>>(it) }
                 ?: emptyList(),
+            characterLorebookId = characterLorebookId,
             verbosity = verbosity,
+            rawCardData = rawCardDataJson?.takeIf { it.isNotBlank() }?.let { json.decodeFromString<JsonObject>(it) },
             createdAt = createdAt,
             updatedAt = updatedAt,
         )
@@ -134,7 +181,9 @@ class CharacterRepository @Inject constructor(
             regexScriptsJson = json.encodeToString(regexScripts),
             avatarPath = avatarPath,
             lorebookIdsJson = json.encodeToString(lorebookIds),
+            characterLorebookId = characterLorebookId,
             verbosity = verbosity,
+            rawCardDataJson = rawCardData?.let { json.encodeToString(JsonObject.serializer(), it) },
             createdAt = createdAt,
             updatedAt = updatedAt,
             displayOrder = displayOrder,

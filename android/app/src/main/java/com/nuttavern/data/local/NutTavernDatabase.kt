@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 12,
+    version = 17,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -205,6 +205,75 @@ abstract class NutTavernDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 if (!db.hasColumn("conversations", "lorebookTimedEffectsJson")) {
                     db.execSQL("ALTER TABLE `conversations` ADD COLUMN `lorebookTimedEffectsJson` TEXT NOT NULL DEFAULT '{}'")
+                }
+            }
+        }
+
+        /**
+         * 角色内嵌世界书条目改用 V3 extensions 嵌套格式存盘。
+         *
+         * 旧格式把 position/role/selectiveLogic 等高级字段平铺在条目顶层,新格式统一放进
+         * extensions 子对象(对齐酒馆 character_book)。两套格式键名不兼容,旧 JSON 反序列化时
+         * 高级字段会被 ignoreUnknownKeys 静默丢成默认值,属于隐性数据损坏。
+         *
+         * 骨架期无真实角色书数据,直接清空 characterBookJson(置 NULL = 角色无内嵌世界书),
+         * 角色卡本身保留,用户重建条目即按新格式存盘。只清这一列,不抹整张 characters 表。
+         */
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("UPDATE `characters` SET `characterBookJson` = NULL")
+            }
+        }
+
+        /**
+         * 角色世界书重构:角色卡新增 characterLorebookId(角色世界书,单选,对齐酒馆 extensions.world)。
+         *
+         * 原"角色内嵌世界书"(characterBookJson)运行时不再单独消费,改由 characterLorebookId
+         * 指向的独立世界书参与激活;辅助世界书继续用 lorebookIdsJson。新列可空,默认 NULL = 未选择。
+         */
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("characters", "characterLorebookId")) {
+                    db.execSQL("ALTER TABLE `characters` ADD COLUMN `characterLorebookId` TEXT DEFAULT NULL")
+                }
+            }
+        }
+
+        /**
+         * 角色卡加 rawCardDataJson:导入 V3 卡时未建模的 data 顶层字段(JSON object 串),
+         * 保证导出 round-trip 不丢字段。新列可空,默认 NULL = 没有未建模字段。
+         */
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("characters", "rawCardDataJson")) {
+                    db.execSQL("ALTER TABLE `characters` ADD COLUMN `rawCardDataJson` TEXT DEFAULT NULL")
+                }
+            }
+        }
+
+        /**
+         * 会话加 thinkingLevel 字段:会话级思考量(reasoning effort)。
+         *
+         * 老会话默认 NULL = 加载时退化为"自动"(不发送思考字段),与升级前"思考量只在内存
+         * 关 app 丢失"的旧行为对齐。新会话由 ChatViewModel 在创建时写入当前默认思考量。
+         */
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("conversations", "thinkingLevel")) {
+                    db.execSQL("ALTER TABLE `conversations` ADD COLUMN `thinkingLevel` TEXT DEFAULT NULL")
+                }
+            }
+        }
+
+        /**
+         * 消息加 attachmentsJson 字段:用户随消息发送的图片附件列表(JSON 数组)。
+         *
+         * 老消息默认 '[]' = 纯文本,与升级前行为一致。图片二进制落 filesDir,DB 只存元数据。
+         */
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("messages", "attachmentsJson")) {
+                    db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentsJson` TEXT NOT NULL DEFAULT '[]'")
                 }
             }
         }

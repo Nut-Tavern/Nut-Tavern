@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -40,7 +39,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
-import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
@@ -53,6 +51,9 @@ import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.preset.PromptEntry
 import com.nuttavern.data.preset.PromptOrderEntry
 import com.nuttavern.data.preset.PromptOrderForCharacter
+import com.nuttavern.data.preset.presetRegexScripts
+import com.nuttavern.data.preset.withPresetRegexScripts
+import com.nuttavern.ui.components.NutTavernEnumRow
 import com.nuttavern.ui.components.NutTavernExpandableHeader
 import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
@@ -60,6 +61,7 @@ import com.nuttavern.ui.components.NutTavernGroupTokens
 import com.nuttavern.ui.components.NutTavernIconRow
 import com.nuttavern.ui.components.NutTavernLabeledTextField
 import com.nuttavern.ui.components.NutTavernNumericField
+import com.nuttavern.ui.components.NutTavernSwitchRow
 import com.nuttavern.ui.components.NumericParser
 import com.nuttavern.ui.viewmodel.PresetViewModel
 import kotlinx.serialization.json.Json
@@ -172,7 +174,6 @@ private fun PresetEditScreenContent(
     }
     val isDirty = draft != initial
     val canSave = draft.name.isNotBlank()
-    val context = androidx.compose.ui.platform.LocalContext.current
 
     var advancedGenerationExpanded by remember { mutableStateOf(false) }
     var compositionExpanded by remember { mutableStateOf(false) }
@@ -180,6 +181,7 @@ private fun PresetEditScreenContent(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showUnsavedDialog by remember { mutableStateOf(false) }
     var entryEditorTarget by remember { mutableStateOf<PromptEntry?>(null) }
+    var showPresetRegexEditor by remember { mutableStateOf(false) }
     var selectedTab by rememberSaveable { mutableStateOf(0) }
 
     val triggerBack: () -> Unit = {
@@ -246,7 +248,7 @@ private fun PresetEditScreenContent(
                     apiBehaviorExpanded = apiBehaviorExpanded,
                     onApiBehaviorExpandedChange = { apiBehaviorExpanded = it },
                     onShowDeleteDialog = { showDeleteDialog = true },
-                    context = context,
+                    onOpenPresetRegexEditor = { showPresetRegexEditor = true },
                 )
             }
         }
@@ -282,6 +284,14 @@ private fun PresetEditScreenContent(
                     entryEditorTarget = null
                 }
             },
+        )
+    }
+
+    if (showPresetRegexEditor) {
+        PresetRegexEditor(
+            scripts = draft.presetRegexScripts(),
+            onChange = { next -> draft = draft.withPresetRegexScripts(next) },
+            onBack = { showPresetRegexEditor = false },
         )
     }
 
@@ -631,123 +641,6 @@ private fun IntField(
     )
 }
 
-@Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
-) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        onClick = { onCheckedChange(!checked) },
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
-                if (!subtitle.isNullOrBlank()) {
-                    Text(
-                        text = subtitle,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-            Switch(checked = checked, onCheckedChange = onCheckedChange)
-        }
-    }
-}
-
-/**
- * 枚举选择行。点击弹出 ModalBottomSheet,内部用 NutTavernSelectableRow 单选。
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun EnumRow(
-    label: String,
-    value: String,
-    options: List<String>,
-    onSelect: (String) -> Unit,
-    optionLabels: Map<String, String> = emptyMap(),
-    optionDescriptions: Map<String, String> = emptyMap(),
-) {
-    var showSheet by remember { mutableStateOf(false) }
-    val displayValue = optionLabels[value] ?: value
-
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        onClick = { showSheet = true },
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                text = label,
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = displayValue,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Icon(
-                imageVector = Lucide.ChevronRight,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-
-    if (showSheet) {
-        androidx.compose.material3.ModalBottomSheet(
-            onDismissRequest = { showSheet = false },
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                com.nuttavern.ui.components.NutTavernSheetTitle(title = label)
-                options.forEach { option ->
-                    com.nuttavern.ui.components.NutTavernSelectableRow(
-                        title = optionLabels[option] ?: option,
-                        subtitle = optionDescriptions[option],
-                        selected = option == value,
-                        onClick = {
-                            onSelect(option)
-                            showSheet = false
-                        },
-                    )
-                }
-                Spacer(Modifier.padding(bottom = 16.dp))
-            }
-        }
-    }
-}
-
 private val PresetSaver: Saver<Preset, String> = Saver(
     save = { value -> Json.encodeToString(Preset.serializer(), value) },
     restore = { stored ->
@@ -889,8 +782,10 @@ private fun SettingsTabContent(
     apiBehaviorExpanded: Boolean,
     onApiBehaviorExpandedChange: (Boolean) -> Unit,
     onShowDeleteDialog: () -> Unit,
-    context: android.content.Context,
+    onOpenPresetRegexEditor: () -> Unit,
 ) {
+    val presetRegexScripts = remember(draft.extensions) { draft.presetRegexScripts() }
+
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -965,7 +860,7 @@ private fun SettingsTabContent(
             }
             item(key = "request-flags") {
                 NutTavernGroupSection {
-                    SwitchRow(label = "流式传输", subtitle = "边生成边显示;关闭后等模型出完整回复再展示", checked = draft.streamEnabled, onCheckedChange = { onDraftChange(draft.copy(streamEnabled = it)) })
+                    NutTavernSwitchRow(label = "流式传输", subtitle = "边生成边显示;关闭后等模型出完整回复再展示", checked = draft.streamEnabled, onCheckedChange = { onDraftChange(draft.copy(streamEnabled = it)) })
                 }
             }
         }
@@ -997,9 +892,9 @@ private fun SettingsTabContent(
                     NutTavernGroupDivider()
                     NutTavernLabeledTextField(label = "世界书格式模板", value = draft.wiFormat, onValueChange = { onDraftChange(draft.copy(wiFormat = it)) }, supportingText = "拼接世界书条目时套用;{0} 替换为条目内容")
                     NutTavernGroupDivider()
-                    EnumRow(label = "名称行为", value = draft.namesBehavior.name.lowercase(), options = listOf("none", "default", "completion", "content"), onSelect = { onDraftChange(draft.copy(namesBehavior = NamesBehavior.valueOf(it.uppercase()))) }, optionLabels = mapOf("none" to "不添加", "default" to "默认", "completion" to "补全模式", "content" to "消息内容"), optionDescriptions = mapOf("none" to "不在消息里加名字", "default" to "由后端决定", "completion" to "名字加在 content 开头", "content" to "用 name 字段传递"))
+                    NutTavernEnumRow(label = "名称行为", value = draft.namesBehavior.name.lowercase(), options = listOf("none" to "不添加", "default" to "默认", "completion" to "补全模式", "content" to "消息内容"), onSelect = { onDraftChange(draft.copy(namesBehavior = NamesBehavior.valueOf(it.uppercase()))) }, optionDescriptions = mapOf("none" to "不在消息里加名字", "default" to "由后端决定", "completion" to "名字加在 content 开头", "content" to "用 name 字段传递"))
                     NutTavernGroupDivider()
-                    EnumRow(label = "续写后缀", value = draft.continuePostfix.name.lowercase(), options = listOf("none", "space", "newline", "double_newline"), onSelect = { onDraftChange(draft.copy(continuePostfix = ContinuePostfix.valueOf(it.uppercase()))) }, optionLabels = mapOf("none" to "无", "space" to "空格", "newline" to "换行", "double_newline" to "双换行"), optionDescriptions = mapOf("none" to "续写时不加后缀", "space" to "加一个空格", "newline" to "加一个换行", "double_newline" to "加两个换行"))
+                    NutTavernEnumRow(label = "续写后缀", value = draft.continuePostfix.name.lowercase(), options = listOf("none" to "无", "space" to "空格", "newline" to "换行", "double_newline" to "双换行"), onSelect = { onDraftChange(draft.copy(continuePostfix = ContinuePostfix.valueOf(it.uppercase()))) }, optionDescriptions = mapOf("none" to "续写时不加后缀", "space" to "加一个空格", "newline" to "加一个换行", "double_newline" to "加两个换行"))
                 }
             }
         }
@@ -1010,15 +905,15 @@ private fun SettingsTabContent(
         if (apiBehaviorExpanded) {
             item(key = "api-behavior-1") {
                 NutTavernGroupSection {
-                    SwitchRow(label = "续写预填", subtitle = "续写时把已有文本作为 assistant prefill 发送", checked = draft.continuePrefill, onCheckedChange = { onDraftChange(draft.copy(continuePrefill = it)) })
+                    NutTavernSwitchRow(label = "续写预填", subtitle = "续写时把已有文本作为 assistant prefill 发送", checked = draft.continuePrefill, onCheckedChange = { onDraftChange(draft.copy(continuePrefill = it)) })
                     NutTavernGroupDivider()
-                    SwitchRow(label = "压缩系统消息", subtitle = "把连续的 system 消息合并成一条", checked = draft.squashSystemMessages, onCheckedChange = { onDraftChange(draft.copy(squashSystemMessages = it)) })
+                    NutTavernSwitchRow(label = "压缩系统消息", subtitle = "把连续的 system 消息合并成一条", checked = draft.squashSystemMessages, onCheckedChange = { onDraftChange(draft.copy(squashSystemMessages = it)) })
                     NutTavernGroupDivider()
-                    SwitchRow(label = "使用系统提示词", subtitle = "把 system 内容放到 API 的 system 字段", checked = draft.useSysprompt, onCheckedChange = { onDraftChange(draft.copy(useSysprompt = it)) })
+                    NutTavernSwitchRow(label = "使用系统提示词", subtitle = "把 system 内容放到 API 的 system 字段", checked = draft.useSysprompt, onCheckedChange = { onDraftChange(draft.copy(useSysprompt = it)) })
                     NutTavernGroupDivider()
-                    SwitchRow(label = "内联媒体", subtitle = "把图片/音频 base64 拼进消息内容", checked = draft.mediaInlining, onCheckedChange = { onDraftChange(draft.copy(mediaInlining = it)) })
+                    NutTavernSwitchRow(label = "内联媒体", subtitle = "把图片/音频 base64 拼进消息内容", checked = draft.mediaInlining, onCheckedChange = { onDraftChange(draft.copy(mediaInlining = it)) })
                     NutTavernGroupDivider()
-                    SwitchRow(label = "解锁最大上下文", subtitle = "无视已知模型上下文上限", checked = draft.maxContextUnlocked, onCheckedChange = { onDraftChange(draft.copy(maxContextUnlocked = it)) })
+                    NutTavernSwitchRow(label = "解锁最大上下文", subtitle = "无视已知模型上下文上限", checked = draft.maxContextUnlocked, onCheckedChange = { onDraftChange(draft.copy(maxContextUnlocked = it)) })
                 }
             }
             item(key = "api-behavior-2") {
@@ -1032,7 +927,13 @@ private fun SettingsTabContent(
 
         item(key = "preset-regex") {
             NutTavernGroupSection {
-                NutTavernIconRow(icon = Lucide.Regex, title = "预设内嵌正则", subtitle = "随预设生效的正则规则", showTrailingChevron = true, onClick = { android.widget.Toast.makeText(context, "预设内嵌正则编辑 暂未接入", android.widget.Toast.LENGTH_SHORT).show() })
+                NutTavernIconRow(
+                    icon = Lucide.Regex,
+                    title = "预设正则",
+                    subtitle = presetRegexSubtitle(presetRegexScripts),
+                    showTrailingChevron = true,
+                    onClick = onOpenPresetRegexEditor,
+                )
             }
         }
 
@@ -1044,6 +945,15 @@ private fun SettingsTabContent(
             }
         }
     }
+}
+
+/**
+ * "预设正则"行 subtitle。空列表提示新建,否则给"总数 / 启用数"。
+ */
+private fun presetRegexSubtitle(scripts: List<com.nuttavern.data.regex.RegexScript>): String {
+    if (scripts.isEmpty()) return "随预设生效的正则规则,点击新增"
+    val enabled = scripts.count { !it.disabled }
+    return "共 ${scripts.size} 条,启用 $enabled 条"
 }
 
 /**

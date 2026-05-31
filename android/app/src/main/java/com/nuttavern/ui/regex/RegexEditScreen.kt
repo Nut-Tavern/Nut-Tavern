@@ -424,7 +424,8 @@ private fun PlacementSheet(
         RegexPlacement.WORLD_INFO to ("世界书" to "对世界书条目生效(待接入)"),
         RegexPlacement.REASONING to ("推理内容" to "对推理块内容生效(待接入)"),
     )
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -474,7 +475,8 @@ private fun TimingSheet(
         RegexExecutionTiming.PROMPT_AND_EDIT to ("发送和编辑时" to "发送给角色时和手动编辑时都执行。不改变聊天记录"),
         RegexExecutionTiming.DISPLAY_PROMPT_AND_EDIT to ("显示、发送和编辑时" to "渲染 / 发送 / 编辑时全部执行。不改变聊天记录"),
     )
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -516,7 +518,8 @@ private fun SubstituteSheet(
         SubstituteRegex.RAW to ("匹配实际值（原始）" to "先将宏变量替换为实际内容"),
         SubstituteRegex.ESCAPED to ("匹配实际值（转义）" to "替换实际内容并进行正则转义"),
     )
-    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss) {
+    val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()

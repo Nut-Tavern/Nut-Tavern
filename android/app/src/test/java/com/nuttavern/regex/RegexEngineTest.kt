@@ -15,8 +15,8 @@ import org.junit.Test
  * RegexEngine 单测。覆盖以下路径:
  *
  * 1. JS regex flag 兼容(i / s / m,g 自动全局,u/y 静默忽略);
- * 2. 替换串引用语法转换({{match}} / $1 / $<name>);
- * 3. trimStrings 在替换之前生效;
+ * 2. 替换串引用语法({{match}} / $0 / $1 / $<name>,缺失引用 → 空串,字面 $ 保留);
+ * 3. trimStrings 作用在被引用的捕获组值上(对齐酒馆 filterString,不动整段输入);
  * 4. SubstituteRegex 三模式(NONE / RAW / ESCAPED);
  * 5. 三作用域执行顺序与开关(GLOBAL → SCOPED → PRESET,characterAllowed / presetAllowed);
  * 6. placement 过滤(USER_INPUT / AI_OUTPUT 不互通);
@@ -112,10 +112,27 @@ class RegexEngineTest {
         assertEquals("lice-A", out)
     }
 
-    // ─── trimStrings ────────────────────────────────
+    // ─── trimStrings(作用在被引用的捕获组值上,对齐酒馆 filterString)──
 
     @Test
-    fun trimStringsAreRemovedBeforeMatch() {
+    fun trimStringsRemovedFromReferencedGroupValue() {
+        // 对齐酒馆 engine.js 第 438 行:trimStrings 只作用在替换串引用到的**组值**上,
+        // 不动整段输入。组 1 捕获 "<noise>secret<noise>",trim 掉 "<noise>" → "secret"。
+        val out = engine.runRegexScript(
+            "<tag><noise>secret<noise></tag>",
+            buildScript(
+                findRegex = "/<tag>(.*)<\\/tag>/",
+                replaceString = "$1",
+                trimStrings = listOf("<noise>"),
+            ),
+        )
+        assertEquals("secret", out)
+    }
+
+    @Test
+    fun trimStringsDoNotTouchInputOutsideReferencedGroups() {
+        // 替换串无组引用(纯字面 "OK"),trimStrings 不会作用到任何地方;
+        // 输入里匹配区域外的 "<noise>" 应原样保留 —— 与旧"整段先 trim"实现的关键区别。
         val out = engine.runRegexScript(
             "<noise>Hello world<noise>",
             buildScript(
@@ -124,21 +141,69 @@ class RegexEngineTest {
                 trimStrings = listOf("<noise>"),
             ),
         )
-        assertEquals("OK", out)
+        assertEquals("<noise>OK<noise>", out)
     }
 
     @Test
-    fun trimStringsRoundTripPreservesUnaffectedText() {
-        // trim 把噪声标记移除后,正则匹配内容,replace 写回,中间未匹配的部分不受影响。
+    fun trimStringsAppliedPerGroupNotWholeMatch() {
+        // 多组引用,每个组值各自 trim。组 1 = "[a]x[a]" → "x",组 2 = "[a]y[a]" → "y"。
         val out = engine.runRegexScript(
-            "[start]a b c[end]",
+            "([a]x[a])([a]y[a])",
             buildScript(
-                findRegex = "/a b c/",
-                replaceString = "ABC",
-                trimStrings = listOf("[start]", "[end]"),
+                findRegex = "/\\(([^)]*)\\)\\(([^)]*)\\)/",
+                replaceString = "$1-$2",
+                trimStrings = listOf("[a]"),
             ),
         )
-        assertEquals("ABC", out)
+        assertEquals("x-y", out)
+    }
+
+    @Test
+    fun matchMacroValueAlsoTrimmed() {
+        // {{match}} → $0(整匹配)也算被引用的组值,同样过 trimStrings。
+        val out = engine.runRegexScript(
+            "<x>keep<x>",
+            buildScript(
+                findRegex = "/<x>keep<x>/",
+                replaceString = "{{match}}",
+                trimStrings = listOf("<x>"),
+            ),
+        )
+        assertEquals("keep", out)
+    }
+
+    @Test
+    fun missingNumberedGroupReferenceBecomesEmpty() {
+        // 引用不存在的组($3,但只有 2 个组)→ 空串(酒馆 engine.js 第 433-435 行)。
+        val out = engine.runRegexScript(
+            "ab",
+            buildScript(findRegex = "/(a)(b)/", replaceString = "$1$3$2"),
+        )
+        assertEquals("ab", out)
+    }
+
+    @Test
+    fun missingNamedGroupReferenceBecomesEmpty() {
+        // 引用不存在的命名组 → 空串,不抛异常。
+        val out = engine.runRegexScript(
+            "ab",
+            buildScript(
+                findRegex = "/(?<first>a)(b)/",
+                replaceString = "\$<first>\$<missing>",
+            ),
+        )
+        assertEquals("a", out)
+    }
+
+    @Test
+    fun literalDollarSequenceNotMatchedAsGroupIsPreserved() {
+        // 替换串里 "$x"(x 非数字、非 <name>)不被引用正则匹配 → 原样保留,不报错。
+        // 这正是手动解析相比 Kotlin Regex.replace 的优势:字面 $ 不触发异常。
+        val out = engine.runRegexScript(
+            "price",
+            buildScript(findRegex = "/price/", replaceString = "cost is \$x here"),
+        )
+        assertEquals("cost is \$x here", out)
     }
 
     // ─── SubstituteRegex(作用于 Find Regex)────────────

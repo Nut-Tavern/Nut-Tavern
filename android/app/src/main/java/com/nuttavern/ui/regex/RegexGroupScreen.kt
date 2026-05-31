@@ -1,6 +1,9 @@
 package com.nuttavern.ui.regex
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,12 +40,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.ArrowRightLeft
 import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.FileUp
+import com.composables.icons.lucide.FolderOutput
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.EllipsisVertical
@@ -51,6 +57,7 @@ import com.composables.icons.lucide.Trash2
 import com.nuttavern.data.regex.RegexGroup
 import com.nuttavern.data.regex.RegexScript
 import com.nuttavern.ui.viewmodel.RegexScriptViewModel
+import kotlinx.serialization.json.Json
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -121,8 +128,11 @@ fun RegexGroupScreen(
         return
     }
 
+    val snapshot by viewModel.snapshot.collectAsState()
+
     RegexGroupContent(
         group = currentGroup,
+        allGroups = snapshot.groups,
         onBack = onBack,
         onOpenScriptDetail = { scriptId -> onOpenScriptDetail(groupId, scriptId) },
         onRename = { name -> viewModel.renameGroup(groupId, name) },
@@ -136,6 +146,10 @@ fun RegexGroupScreen(
         onReorder = { orderedIds -> viewModel.reorderScriptsInGroup(groupId, orderedIds) },
         onDuplicateScript = { scriptId -> viewModel.duplicateScriptInGroup(groupId, scriptId) },
         onDeleteScript = { scriptId -> viewModel.deleteScriptFromGroup(groupId, scriptId) },
+        onMoveScriptOut = { scriptId -> viewModel.moveScriptOutOfGroup(groupId, scriptId) },
+        onMoveScriptToOtherGroup = { scriptId, targetGroupId ->
+            viewModel.moveScriptToOtherGroup(groupId, scriptId, targetGroupId)
+        },
     )
 }
 
@@ -199,6 +213,7 @@ private fun RegexGroupCreateScreen(
 @Composable
 private fun RegexGroupContent(
     group: RegexGroup,
+    allGroups: List<RegexGroup>,
     onBack: () -> Unit,
     onOpenScriptDetail: (scriptId: String) -> Unit,
     onRename: (String) -> Unit,
@@ -207,6 +222,8 @@ private fun RegexGroupContent(
     onReorder: (List<String>) -> Unit,
     onDuplicateScript: (scriptId: String) -> Unit,
     onDeleteScript: (scriptId: String) -> Unit,
+    onMoveScriptOut: (scriptId: String) -> Unit,
+    onMoveScriptToOtherGroup: (scriptId: String, targetGroupId: String) -> Unit,
 ) {
     var showMenu by remember { mutableStateOf(false) }
     var showRenameDialog by remember { mutableStateOf(false) }
@@ -285,11 +302,15 @@ private fun RegexGroupContent(
         } else {
             GroupScriptList(
                 scripts = group.scripts,
+                groupId = group.id,
+                allGroups = allGroups,
                 contentPadding = padding,
                 onScriptClick = onOpenScriptDetail,
                 onCommitOrder = onReorder,
                 onDuplicateScript = onDuplicateScript,
                 onDeleteScript = onDeleteScript,
+                onMoveScriptOut = onMoveScriptOut,
+                onMoveScriptToOtherGroup = onMoveScriptToOtherGroup,
             )
         }
     }
@@ -331,14 +352,37 @@ private fun RegexGroupContent(
 @Composable
 private fun GroupScriptList(
     scripts: List<RegexScript>,
+    groupId: String,
+    allGroups: List<RegexGroup>,
     contentPadding: PaddingValues,
     onScriptClick: (scriptId: String) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
     onDuplicateScript: (scriptId: String) -> Unit,
     onDeleteScript: (scriptId: String) -> Unit,
+    onMoveScriptOut: (scriptId: String) -> Unit,
+    onMoveScriptToOtherGroup: (scriptId: String, targetGroupId: String) -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
+    val context = LocalContext.current
     var longPressScript by remember { mutableStateOf<RegexScript?>(null) }
+    var showMigratePickerFor by remember { mutableStateOf<String?>(null) }
+
+    val regexJson = remember {
+        Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
+    }
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val json = pendingExportJson ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
+            android.widget.Toast.makeText(context, "导出成功", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "导出失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        pendingExportJson = null
+    }
 
     var localOrder by remember { mutableStateOf(scripts) }
     LaunchedEffect(scripts) {
@@ -404,27 +448,56 @@ private fun GroupScriptList(
         val script = longPressScript!!
         com.nuttavern.ui.components.NutTavernEntityActionsSheet(
             title = script.scriptName.ifBlank { "未命名规则" },
-            actions = listOf(
-                com.nuttavern.ui.components.EntityAction(
+            actions = buildList {
+                add(com.nuttavern.ui.components.EntityAction(
                     icon = Lucide.Copy,
                     title = "复制",
                     onClick = { onDuplicateScript(script.id) },
-                ),
-                com.nuttavern.ui.components.EntityAction(
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
+                    icon = Lucide.FolderOutput,
+                    title = "移出正则组",
+                    onClick = { onMoveScriptOut(script.id) },
+                ))
+                if (allGroups.size > 1) {
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.ArrowRightLeft,
+                        title = "迁移到其他正则组",
+                        onClick = { showMigratePickerFor = script.id },
+                    ))
+                }
+                add(com.nuttavern.ui.components.EntityAction(
                     icon = Lucide.FileUp,
                     title = "导出",
                     onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        pendingExportJson = regexJson.encodeToString(RegexScript.serializer(), script)
+                        exportLauncher.launch("regex-${script.scriptName.ifBlank { "unnamed" }}.json")
                     },
-                ),
-                com.nuttavern.ui.components.EntityAction(
+                ))
+                add(com.nuttavern.ui.components.EntityAction(
                     icon = Lucide.Trash2,
                     title = "删除",
                     destructive = true,
                     onClick = { onDeleteScript(script.id) },
-                ),
-            ),
+                ))
+            },
             onDismiss = { longPressScript = null },
+        )
+    }
+
+    // 迁移到其他正则组:目标组选择 Sheet
+    val migrateTarget = showMigratePickerFor
+    if (migrateTarget != null) {
+        RegexGroupPickerSheet(
+            groups = allGroups,
+            title = "迁移到其他正则组",
+            description = "选择目标组",
+            excludeGroupId = groupId,
+            onSelect = { targetGroupId ->
+                onMoveScriptToOtherGroup(migrateTarget, targetGroupId)
+                showMigratePickerFor = null
+            },
+            onDismiss = { showMigratePickerFor = null },
         )
     }
 }

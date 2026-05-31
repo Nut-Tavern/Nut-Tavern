@@ -148,6 +148,7 @@ internal fun MultiSelectPickerCard(
     enabled: Boolean,
     onToggle: (Boolean) -> Unit,
     onEdit: (() -> Unit)? = null,
+    locked: Boolean = false,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -189,7 +190,8 @@ internal fun MultiSelectPickerCard(
                     )
                 }
             }
-            Switch(checked = enabled, onCheckedChange = onToggle)
+            // locked:角色世界书在辅助世界书选择里强制勾选不可取消(纯前端约束,不写进 lorebookIds)
+            Switch(checked = enabled, onCheckedChange = onToggle, enabled = !locked)
         }
     }
 }

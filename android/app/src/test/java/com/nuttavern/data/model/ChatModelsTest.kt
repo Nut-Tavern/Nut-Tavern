@@ -5,10 +5,36 @@ import org.junit.Test
 
 class ChatModelsTest {
     @Test
-    fun thinkingLevel_labelsUseReadableChinese() {
-        assertEquals("低", ThinkingLevel.LOW.label)
-        assertEquals("中", ThinkingLevel.MEDIUM.label)
-        assertEquals("高", ThinkingLevel.HIGH.label)
+    fun effortTier_labelsUseReadableChinese() {
+        assertEquals("极低", EffortTier.MINIMAL.label)
+        assertEquals("低", EffortTier.LOW.label)
+        assertEquals("中", EffortTier.MEDIUM.label)
+        assertEquals("高", EffortTier.HIGH.label)
+        assertEquals("极高", EffortTier.MAX.label)
+    }
+
+    @Test
+    fun thinkingLevel_serializeRoundTrip() {
+        val levels = listOf(
+            ThinkingLevel.Off,
+            ThinkingLevel.Auto,
+            ThinkingLevel.Effort(EffortTier.MINIMAL),
+            ThinkingLevel.Effort(EffortTier.MAX),
+            ThinkingLevel.Budget(4096),
+        )
+        levels.forEach { level ->
+            assertEquals(level, ThinkingLevel.parse(ThinkingLevel.serialize(level)))
+        }
+    }
+
+    @Test
+    fun thinkingLevel_parseFallsBackToDefaultOnGarbage() {
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse(null))
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse(""))
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse("nonsense"))
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse("effort:UNKNOWN"))
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse("budget:0"))
+        assertEquals(ThinkingLevel.Default, ThinkingLevel.parse("budget:-5"))
     }
 
     @Test

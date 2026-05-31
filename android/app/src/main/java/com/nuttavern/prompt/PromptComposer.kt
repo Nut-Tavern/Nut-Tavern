@@ -10,6 +10,7 @@ import com.nuttavern.data.preset.PromptEntry
 import com.nuttavern.data.preset.PromptOrderEntry
 import com.nuttavern.data.preset.PromptOrderForCharacter
 import com.nuttavern.data.preset.PromptRole
+import com.nuttavern.data.preset.presetRegexScripts
 import com.nuttavern.data.regex.RegexPlacement
 import com.nuttavern.data.regex.RegexScript
 import com.nuttavern.network.ChatMessage
@@ -63,7 +64,7 @@ import javax.inject.Singleton
  *    把预设的生成参数(temperature / max_tokens / 各 penalty / seed / n 等)映射到
  *    [GenerationParams],随 [PromptComposerOutput] 一起返回,供 ChatApiClient 透传到请求体。
  *    `verbosity` 来自当前 [Character.verbosity];reasoning 走会话级
- *    [com.nuttavern.ui.viewmodel.ChatViewModel.draftThinkingLevel](由 ChatViewModel 注入到
+ *    [com.nuttavern.ui.viewmodel.ChatViewModel.currentThinkingLevel](由 ChatViewModel 注入到
  *    [GenerationParams.thinkingLevelOverride]);`customPostProcessing` 来自当前 Provider,
  *    由 ChatViewModel 在调用 ChatApiClient 前注入。
  * ```
@@ -110,7 +111,7 @@ class PromptComposer @Inject constructor(
                     placement = RegexPlacement.USER_INPUT,
                     globalScripts = input.globalRegexScripts,
                     scopedScripts = character?.regexScripts.orEmpty(),
-                    presetScripts = extractPresetRegexScripts(preset),
+                    presetScripts = preset.presetRegexScripts(),
                     characterAllowed = input.characterAllowedRegex,
                     presetAllowed = input.presetAllowedRegex,
                     isPrompt = true,
@@ -214,7 +215,7 @@ class PromptComposer @Inject constructor(
         }
         if (includeChatHistory) {
             input.history.forEach { msg ->
-                composedMessages += ChatMessage(role = msg.role, content = msg.content)
+                composedMessages += ChatMessage(role = msg.role, content = msg.content, images = msg.images)
             }
             // 用户输入可空:重试 / regenerate 路径不带新用户消息。
             processedUserMessage?.takeIf { it.isNotBlank() }?.let {
@@ -533,18 +534,6 @@ class PromptComposer @Inject constructor(
             .filterKeys { it.isNotBlank() }
     }
 
-    /**
-     * 从 [Preset.extensions] 取 `regex_scripts` 节点。**对齐酒馆**:
-     * 预设里的正则脚本不进 Preset 顶层 schema,挂在 extensions 里,导入导出 round-trip 时
-     * 与酒馆 JSON 兼容。解析失败 / 节点不存在返回空列表,不抛异常。
-     */
-    private fun extractPresetRegexScripts(preset: Preset): List<RegexScript> {
-        val node = preset.extensions["regex_scripts"] ?: return emptyList()
-        return runCatching {
-            PRESET_REGEX_JSON.decodeFromJsonElement(REGEX_SCRIPT_LIST_SERIALIZER, node)
-        }.getOrDefault(emptyList())
-    }
-
     private inline fun <T> runNode(name: String, diagnostics: MutableList<String>, block: () -> T): T? {
         return try {
             block()
@@ -579,14 +568,6 @@ class PromptComposer @Inject constructor(
     private companion object {
         /** 与酒馆 mes_example 解析一致:`<START>` 大小写不敏感。 */
         val EXAMPLE_DELIMITER = Regex("<START>", RegexOption.IGNORE_CASE)
-
-        /** 解析 [Preset.extensions] 里的 `regex_scripts` 节点用,容忍未知字段。 */
-        val PRESET_REGEX_JSON = kotlinx.serialization.json.Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        }
-        val REGEX_SCRIPT_LIST_SERIALIZER =
-            kotlinx.serialization.builtins.ListSerializer(RegexScript.serializer())
 
         // 酒馆系统 marker / 系统条目的 identifier 常量,与 Default.json 对齐。
         const val ID_MAIN = "main"
@@ -632,10 +613,14 @@ data class PromptComposerInput(
 /**
  * 历史消息的最小数据袋。和 [com.nuttavern.data.model.Message] 字段对齐,但不带 reasoning,
  * 让 PromptComposer 不依赖 ChatViewModel 的 Message 类型。
+ *
+ * [images] 是已编码好的待发图片(base64),由 ChatViewModel 在拼接前从附件文件读出。
+ * PromptComposer 不碰图片二进制,只把它随消息透传到输出 [ChatMessage]。
  */
 data class HistoryMessage(
     val role: String,
     val content: String,
+    val images: List<com.nuttavern.network.ChatImage> = emptyList(),
 )
 
 /**

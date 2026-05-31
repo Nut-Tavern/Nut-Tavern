@@ -6,6 +6,7 @@ import com.nuttavern.data.persona.PersonaRepository
 import com.nuttavern.data.persona.UserPersona
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -13,6 +14,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 用户身份 ViewModel(设置页 / 编辑页 / 抽屉 picker 共用)。
@@ -94,5 +96,18 @@ class UserPersonaViewModel @Inject constructor(
      */
     fun reorderRealPersonas(orderedIds: List<String>) {
         viewModelScope.launch { repository.reorder(orderedIds) }
+    }
+
+    /**
+     * 编辑页手动选图:把相册选中的图片字节落盘为该身份头像,回调返回 avatarPath 供草稿更新。
+     * 落盘失败回调 null。落盘用草稿 id(新身份 [UserPersona] 已生成 UUID),保存时随草稿一起写库。
+     */
+    fun persistAvatar(personaId: String, bytes: ByteArray, extension: String, onSaved: (String?) -> Unit) {
+        viewModelScope.launch {
+            val path = withContext(Dispatchers.IO) {
+                runCatching { repository.saveAvatarBytes(personaId, bytes, extension) }.getOrNull()
+            }
+            onSaved(path)
+        }
     }
 }

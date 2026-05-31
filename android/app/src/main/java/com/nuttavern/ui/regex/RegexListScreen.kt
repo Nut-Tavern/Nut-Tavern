@@ -1,5 +1,8 @@
 package com.nuttavern.ui.regex
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -23,10 +26,12 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -37,19 +42,29 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
+import com.composables.icons.lucide.ArrowRightLeft
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileDown
 import com.composables.icons.lucide.FileUp
+import com.composables.icons.lucide.FolderInput
 import com.composables.icons.lucide.GripVertical
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
 import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.Ungroup
+import com.nuttavern.data.regex.RegexScript
+import com.nuttavern.ui.components.NutTavernSelectableRow
 import com.nuttavern.ui.components.NutTavernShapeTokens
+import com.nuttavern.ui.components.NutTavernSheetTitle
+import com.nuttavern.ui.io.resolveImportFileName
 import com.nuttavern.ui.viewmodel.RegexScriptViewModel
+import kotlinx.serialization.json.Json
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
 
@@ -72,9 +87,63 @@ fun RegexListScreen(
     onOpenRegexGroup: (groupId: String) -> Unit,
     viewModel: RegexScriptViewModel = hiltViewModel(),
 ) {
+    val context = LocalContext.current
     val topLevelItems by viewModel.topLevelItems.collectAsState()
+    val snapshot by viewModel.snapshot.collectAsState()
     var query by remember { mutableStateOf("") }
     var showAddMenu by remember { mutableStateOf(false) }
+    var showGroupPickerFor by remember { mutableStateOf<String?>(null) } // orphan id to move
+
+    val regexJson = remember {
+        Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
+    }
+
+    // 导入 launcher
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            val text = context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText() ?: return@rememberLauncherForActivityResult
+            val scripts: List<RegexScript> = try {
+                regexJson.decodeFromString<List<RegexScript>>(text)
+            } catch (_: Exception) {
+                listOf(regexJson.decodeFromString<RegexScript>(text))
+            }
+            val fileName = uri.resolveImportFileName(context, fallback = "导入").removePrefix("regex-")
+            viewModel.importScripts(scripts, fileName)
+            android.widget.Toast.makeText(context, "已导入 ${scripts.size} 条正则", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "导入失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    // 导出 launcher
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val json = pendingExportJson ?: return@rememberLauncherForActivityResult
+        try {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
+            android.widget.Toast.makeText(context, "导出成功", android.widget.Toast.LENGTH_SHORT).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(context, "导出失败: ${e.message}", android.widget.Toast.LENGTH_SHORT).show()
+        }
+        pendingExportJson = null
+    }
+
+    fun exportSingleScript(script: RegexScript) {
+        pendingExportJson = regexJson.encodeToString(RegexScript.serializer(), script)
+        exportLauncher.launch("regex-${script.scriptName.ifBlank { "unnamed" }}.json")
+    }
+
+    fun exportGroup(groupId: String) {
+        val group = snapshot.groups.find { it.id == groupId } ?: return
+        pendingExportJson = regexJson.encodeToString(kotlinx.serialization.builtins.ListSerializer(RegexScript.serializer()), group.scripts)
+        exportLauncher.launch("regex-${group.name.ifBlank { "group" }}.json")
+    }
 
     val isFiltering = query.isNotBlank()
     val filteredItems = remember(topLevelItems, query) {
@@ -95,6 +164,9 @@ fun RegexListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
+                        Icon(Lucide.FileDown, contentDescription = "导入正则")
+                    }
                     Box {
                         IconButton(onClick = { showAddMenu = true }) {
                             Icon(Lucide.Plus, contentDescription = "新建正则")
@@ -150,10 +222,31 @@ fun RegexListScreen(
                     onDuplicateOrphan = { id -> viewModel.duplicateOrphan(id) },
                     onDeleteGroup = { id -> viewModel.deleteGroup(id) },
                     onDeleteOrphan = { id -> viewModel.deleteOrphan(id) },
+                    onDissolveGroup = { id -> viewModel.dissolveGroup(id) },
+                    onExportGroup = { id -> exportGroup(id) },
+                    onExportOrphan = { id ->
+                        snapshot.orphanScripts.find { it.id == id }?.let { exportSingleScript(it) }
+                    },
+                    onMoveOrphanToGroup = { id -> showGroupPickerFor = id },
                     onCommitOrder = { orderedIds -> viewModel.reorderTopLevel(orderedIds) },
                 )
             }
         }
+    }
+
+    // 移入正则组:目标组选择 Sheet
+    val moveTarget = showGroupPickerFor
+    if (moveTarget != null) {
+        RegexGroupPickerSheet(
+            groups = snapshot.groups,
+            title = "移入正则组",
+            description = "选择要移入的目标组",
+            onSelect = { targetGroupId ->
+                viewModel.moveOrphanToGroup(moveTarget, targetGroupId)
+                showGroupPickerFor = null
+            },
+            onDismiss = { showGroupPickerFor = null },
+        )
     }
 }
 
@@ -215,9 +308,12 @@ private fun RegexTopLevelList(
     onDuplicateOrphan: (id: String) -> Unit,
     onDeleteGroup: (id: String) -> Unit,
     onDeleteOrphan: (id: String) -> Unit,
+    onDissolveGroup: (id: String) -> Unit,
+    onExportGroup: (id: String) -> Unit,
+    onExportOrphan: (id: String) -> Unit,
+    onMoveOrphanToGroup: (id: String) -> Unit,
     onCommitOrder: (List<String>) -> Unit,
 ) {
-    val context = androidx.compose.ui.platform.LocalContext.current
     var longPressTarget by remember { mutableStateOf<LongPressTarget?>(null) }
     var localOrder by remember { mutableStateOf(items) }
     LaunchedEffect(items) {
@@ -329,11 +425,30 @@ private fun RegexTopLevelList(
                         }
                     },
                 ))
+                // 散规则:移入正则组
+                if (target is LongPressTarget.Orphan) {
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.FolderInput,
+                        title = "移入正则组",
+                        onClick = { onMoveOrphanToGroup(target.id) },
+                    ))
+                }
+                // 组:拆散正则组
+                if (target is LongPressTarget.Group) {
+                    add(com.nuttavern.ui.components.EntityAction(
+                        icon = Lucide.Ungroup,
+                        title = "拆散正则组",
+                        onClick = { onDissolveGroup(target.id) },
+                    ))
+                }
                 add(com.nuttavern.ui.components.EntityAction(
                     icon = Lucide.FileUp,
                     title = "导出",
                     onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        when (target) {
+                            is LongPressTarget.Group -> onExportGroup(target.id)
+                            is LongPressTarget.Orphan -> onExportOrphan(target.id)
+                        }
                     },
                 ))
                 add(com.nuttavern.ui.components.EntityAction(
@@ -409,5 +524,52 @@ private fun RegexListEmpty(text: String) {
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+// ── 目标组选择 Sheet ──
+
+/**
+ * 正则组选择 Sheet。用于"移入正则组"和"迁移到其他正则组"操作。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun RegexGroupPickerSheet(
+    groups: List<com.nuttavern.data.regex.RegexGroup>,
+    title: String,
+    description: String,
+    excludeGroupId: String? = null,
+    onSelect: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            NutTavernSheetTitle(title = title, description = description)
+            val available = groups.filter { it.id != excludeGroupId }
+            if (available.isEmpty()) {
+                Text(
+                    text = "暂无可用的正则组",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 16.dp),
+                )
+            } else {
+                available.forEach { group ->
+                    NutTavernSelectableRow(
+                        title = group.name.ifBlank { "未命名规则组" },
+                        subtitle = "${group.scripts.size} 条规则",
+                        selected = false,
+                        onClick = { onSelect(group.id) },
+                    )
+                }
+            }
+            Spacer(Modifier.padding(bottom = 16.dp))
+        }
     }
 }

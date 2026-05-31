@@ -57,4 +57,11 @@ data class ConversationEntity(
      */
     @ColumnInfo(defaultValue = "NULL") val enabledOrphanRegexIds: String? = null,
     @ColumnInfo(defaultValue = "'{}'") val lorebookTimedEffectsJson: String = "{}",
+    /**
+     * 当前会话的思考量(reasoning effort)。会话级,切会话保留各自档位。
+     *
+     * 存 [com.nuttavern.data.model.ThinkingLevel] 的序列化字符串(off / auto / effort:LOW /
+     * budget:4096 等)。null = 老会话迁移上来的兜底,加载时退化为"自动"。
+     */
+    @ColumnInfo(defaultValue = "NULL") val thinkingLevel: String? = null,
 )

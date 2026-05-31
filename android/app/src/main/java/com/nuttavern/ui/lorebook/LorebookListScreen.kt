@@ -1,5 +1,8 @@
 package com.nuttavern.ui.lorebook
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,8 +19,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.CenterAlignedTopAppBar
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileDown
 import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.Lucide
@@ -52,6 +54,7 @@ import com.nuttavern.data.lorebook.Lorebook
 import com.nuttavern.ui.components.NutTavernEntityCard
 import com.nuttavern.ui.components.NutTavernEntityDragHandle
 import com.nuttavern.ui.components.NutTavernShapeTokens
+import com.nuttavern.ui.io.resolveImportFileName
 import com.nuttavern.ui.viewmodel.LorebookViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -74,9 +77,51 @@ fun LorebookListScreen(
     val context = LocalContext.current
     val lorebooks by viewModel.lorebooks.collectAsState()
     var query by remember { mutableStateOf("") }
-    var showAddMenu by remember { mutableStateOf(false) }
     var longPressId by remember { mutableStateOf<String?>(null) }
     var longPressName by remember { mutableStateOf("") }
+
+    // 导入酒馆世界书 JSON:文件名作书名,codec 解析失败 Toast 报错不写入。
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            android.widget.Toast.makeText(context, "无法读取文件", android.widget.Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        val bookName = uri.resolveImportFileName(context, fallback = "导入世界书")
+        viewModel.importFromSillyTavern(
+            jsonText = text,
+            bookName = bookName,
+            onSuccess = { name ->
+                android.widget.Toast.makeText(context, "已导入世界书「$name」", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            onError = { message ->
+                android.widget.Toast.makeText(context, "导入失败: $message", android.widget.Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+
+    // 导出酒馆世界书 JSON:先由 ViewModel 备好文本,再用 CreateDocument 写文件。
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val json = pendingExportJson
+        pendingExportJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
+        }.isSuccess
+        android.widget.Toast.makeText(
+            context,
+            if (ok) "导出成功" else "导出失败",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
 
     val isFiltering = query.isNotBlank()
     val filteredItems = remember(lorebooks, query) {
@@ -94,33 +139,17 @@ fun LorebookListScreen(
                     }
                 },
                 actions = {
-                    Box {
-                        IconButton(onClick = { showAddMenu = true }) {
-                            Icon(Lucide.Plus, contentDescription = "新建世界书")
-                        }
-                        DropdownMenu(
-                            expanded = showAddMenu,
-                            onDismissRequest = { showAddMenu = false },
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("新建世界书") },
-                                onClick = {
-                                    showAddMenu = false
-                                    val book = viewModel.newLorebook()
-                                    viewModel.upsert(book)
-                                    onOpenLorebook(book.id)
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = { Text("导入世界书") },
-                                onClick = {
-                                    showAddMenu = false
-                                    android.widget.Toast.makeText(
-                                        context, "导入功能暂未接入", android.widget.Toast.LENGTH_SHORT,
-                                    ).show()
-                                },
-                            )
-                        }
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
+                        Icon(Lucide.FileDown, contentDescription = "导入世界书")
+                    }
+                    IconButton(
+                        onClick = {
+                            val book = viewModel.newLorebook()
+                            viewModel.upsert(book)
+                            onOpenLorebook(book.id)
+                        },
+                    ) {
+                        Icon(Lucide.Plus, contentDescription = "新建世界书")
                     }
                 },
                 colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
@@ -167,7 +196,12 @@ fun LorebookListScreen(
                     icon = Lucide.FileUp,
                     title = "导出",
                     onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        longPressId?.let { id ->
+                            viewModel.exportToSillyTavern(id) { fileName, jsonText ->
+                                pendingExportJson = jsonText
+                                exportLauncher.launch("$fileName.json")
+                            }
+                        }
                     },
                 ),
                 com.nuttavern.ui.components.EntityAction(

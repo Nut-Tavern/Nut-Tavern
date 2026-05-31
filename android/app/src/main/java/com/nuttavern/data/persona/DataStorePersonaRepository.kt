@@ -1,5 +1,8 @@
 package com.nuttavern.data.persona
 
+import android.content.Context
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
@@ -32,6 +35,7 @@ import kotlinx.coroutines.flow.map
 @Singleton
 class DataStorePersonaRepository @Inject constructor(
     private val dataStore: PersonaDataStore,
+    @param:ApplicationContext private val context: Context,
 ) : PersonaRepository {
 
     override val personas: Flow<List<UserPersona>> = combine(
@@ -79,6 +83,7 @@ class DataStorePersonaRepository @Inject constructor(
                 defaultPersonaId = nextDefault,
             )
         }
+        deleteAvatarFiles(id)
     }
 
     override suspend fun setDefault(id: String) {
@@ -103,6 +108,70 @@ class DataStorePersonaRepository @Inject constructor(
         }
     }
 
+    override suspend fun clearLorebookBinding(lorebookId: String) {
+        dataStore.mutate { snapshot ->
+            val updated = snapshot.personas.map { persona ->
+                if (persona.lorebookId == lorebookId) persona.copy(lorebookId = null)
+                else persona
+            }
+            if (updated == snapshot.personas) snapshot
+            else snapshot.copy(personas = updated)
+        }
+    }
+
+    override suspend fun clearCharacterConnection(characterId: String) {
+        dataStore.mutate { snapshot ->
+            val updated = snapshot.personas.map { persona ->
+                if (characterId in persona.characterConnections) {
+                    persona.copy(characterConnections = persona.characterConnections - characterId)
+                } else {
+                    persona
+                }
+            }
+            if (updated == snapshot.personas) snapshot
+            else snapshot.copy(personas = updated)
+        }
+    }
+
+    override fun saveAvatarBytes(personaId: String, bytes: ByteArray, extension: String): String {
+        val target = avatarFileFor(personaId, extension)
+        target.parentFile?.mkdirs()
+        deleteAvatarFilesExcept(personaId, target)
+        target.writeBytes(bytes)
+        return target.absolutePath
+    }
+
+    private fun avatarFileFor(personaId: String, extension: String): File {
+        require(personaId.isNotBlank()) { "Persona id must not be blank." }
+        // 头像文件名直接用 personaId 拼,必须拒绝路径分隔符 / 上跳,防止写到私有目录外。
+        require(personaId.none { it == '/' || it == '\\' } && !personaId.contains("..")) {
+            "Persona id must not contain path separators."
+        }
+        val safeExtension = extension.trim().trimStart('.').lowercase()
+        require(safeExtension in SUPPORTED_AVATAR_EXTENSIONS) {
+            "Unsupported persona avatar extension: $extension"
+        }
+        return File(personaAvatarDirectory(), "$personaId.$safeExtension")
+    }
+
+    private fun personaAvatarDirectory(): File = File(context.filesDir, PERSONA_AVATAR_DIRECTORY)
+
+    private fun deleteAvatarFilesExcept(personaId: String, keep: File) {
+        SUPPORTED_AVATAR_EXTENSIONS.forEach { ext ->
+            val file = File(personaAvatarDirectory(), "$personaId.$ext")
+            if (file != keep && file.exists()) file.delete()
+        }
+    }
+
+    /** 删除身份时清理它的全部头像文件(各扩展名),避免私有目录残留孤儿文件。 */
+    private fun deleteAvatarFiles(personaId: String) {
+        if (personaId.any { it == '/' || it == '\\' } || personaId.contains("..")) return
+        SUPPORTED_AVATAR_EXTENSIONS.forEach { ext ->
+            val file = File(personaAvatarDirectory(), "$personaId.$ext")
+            if (file.exists()) file.delete()
+        }
+    }
+
     /**
      * 按 [order] 给 [personas] 排序;[order] 里没出现的真实身份按它们在 [personas] 里的原顺序追到末尾。
      */
@@ -111,5 +180,10 @@ class DataStorePersonaRepository @Inject constructor(
         val ordered = order.mapNotNull(byId::get)
         val tail = personas.filter { it.id !in order }
         return ordered + tail
+    }
+
+    private companion object {
+        const val PERSONA_AVATAR_DIRECTORY = "personas"
+        val SUPPORTED_AVATAR_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp")
     }
 }

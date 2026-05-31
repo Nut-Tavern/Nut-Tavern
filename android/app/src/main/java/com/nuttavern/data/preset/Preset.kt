@@ -414,3 +414,45 @@ enum class ContinuePostfix(val value: String) {
     @SerialName("\n") NEWLINE("\n"),
     @SerialName("\n\n") DOUBLE_NEWLINE("\n\n"),
 }
+
+/** 预设内嵌正则在 [Preset.extensions] 里的键名,对齐酒馆 `preset.extensions.regex_scripts`。 */
+private const val PRESET_REGEX_SCRIPTS_KEY = "regex_scripts"
+
+/** 解析 / 写回 [Preset.extensions] 的 `regex_scripts` 节点用,容忍酒馆 JSON 的未知字段。 */
+private val PRESET_REGEX_JSON = kotlinx.serialization.json.Json {
+    ignoreUnknownKeys = true
+    encodeDefaults = true
+}
+
+private val PRESET_REGEX_LIST_SERIALIZER =
+    kotlinx.serialization.builtins.ListSerializer(com.nuttavern.data.regex.RegexScript.serializer())
+
+/**
+ * 从 [Preset.extensions] 解析预设内嵌正则(PRESET 作用域)。对齐酒馆
+ * `preset.extensions.regex_scripts`(index.js:1685 `readPresetExtensionField`)。
+ *
+ * 节点不存在 / 解析失败返回空列表,不抛异常。PromptComposer、ChatViewModel、预设编辑页
+ * 三处共用同一口径,避免重复实现漂移。
+ */
+fun Preset.presetRegexScripts(): List<com.nuttavern.data.regex.RegexScript> {
+    val node = extensions[PRESET_REGEX_SCRIPTS_KEY] ?: return emptyList()
+    return runCatching {
+        PRESET_REGEX_JSON.decodeFromJsonElement(PRESET_REGEX_LIST_SERIALIZER, node)
+    }.getOrDefault(emptyList())
+}
+
+/**
+ * 把预设内嵌正则写回 [Preset.extensions] 的 `regex_scripts` 节点,**保留 extensions 其他键**。
+ *
+ * 空列表时移除 `regex_scripts` 键(避免存空数组脏数据),与酒馆"无脚本则不写该字段"一致。
+ */
+fun Preset.withPresetRegexScripts(scripts: List<com.nuttavern.data.regex.RegexScript>): Preset {
+    val mutated = extensions.toMutableMap()
+    if (scripts.isEmpty()) {
+        mutated.remove(PRESET_REGEX_SCRIPTS_KEY)
+    } else {
+        mutated[PRESET_REGEX_SCRIPTS_KEY] =
+            PRESET_REGEX_JSON.encodeToJsonElement(PRESET_REGEX_LIST_SERIALIZER, scripts)
+    }
+    return copy(extensions = kotlinx.serialization.json.JsonObject(mutated))
+}

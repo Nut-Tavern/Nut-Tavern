@@ -4,12 +4,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.preset.PresetRepository
+import com.nuttavern.data.preset.PresetSillyTavernCodec
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -99,5 +101,41 @@ class PresetViewModel @Inject constructor(
 
     fun reorderPresets(orderedIds: List<String>) {
         viewModelScope.launch { repository.reorder(orderedIds) }
+    }
+
+    /**
+     * 导入酒馆 chat completion 预设 JSON。codec 已赋新 UUID + 文件名作预设名,这里直接 upsert
+     * (永远是新增,无 id 冲突),不设默认。解析失败回调 [onError],不写入仓库。
+     *
+     * @param jsonText 酒馆预设 JSON 文本
+     * @param presetName 预设名(取自文件名)
+     */
+    fun importFromSillyTavern(
+        jsonText: String,
+        presetName: String,
+        onSuccess: (String) -> Unit,
+        onError: (String) -> Unit,
+    ) {
+        val preset = runCatching {
+            PresetSillyTavernCodec.decodeFromSillyTavern(jsonText, presetName)
+        }.getOrElse { error ->
+            onError(error.message ?: "预设格式无法解析")
+            return
+        }
+        viewModelScope.launch {
+            repository.upsert(preset)
+            onSuccess(preset.name)
+        }
+    }
+
+    /**
+     * 导出指定预设为酒馆预设 JSON 文本。预设不存在返回 null。
+     */
+    fun exportToSillyTavern(presetId: String, onReady: (fileName: String, jsonText: String) -> Unit) {
+        viewModelScope.launch {
+            val preset = repository.presets.first().firstOrNull { it.id == presetId } ?: return@launch
+            val jsonText = PresetSillyTavernCodec.encodeToSillyTavern(preset)
+            onReady(preset.name.ifBlank { "preset" }, jsonText)
+        }
     }
 }

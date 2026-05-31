@@ -27,8 +27,15 @@ data class CharacterEntity(
     @ColumnInfo(defaultValue = "") val verbosity: String,
     @ColumnInfo(defaultValue = "0") val createdAt: Long,
     @ColumnInfo(defaultValue = "0") val updatedAt: Long,
-    /** JSON 序列化的 List<String>,绑定的全局世界书 id。 */
+    /** JSON 序列化的 List<String>,辅助世界书 id(对齐酒馆 charLore.extraBooks)。 */
     @ColumnInfo(defaultValue = "[]") val lorebookIdsJson: String,
+    /** 角色世界书 id(单选,对齐酒馆 extensions.world)。null = 未选择。 */
+    @ColumnInfo(defaultValue = "NULL") val characterLorebookId: String?,
+    /**
+     * 导入 V3 卡时未建模的 data 顶层字段(JSON object 串),保证导出 round-trip 不丢字段。
+     * null = 没有未建模字段。详见 [com.nuttavern.data.character.Character.rawCardData]。
+     */
+    @ColumnInfo(defaultValue = "NULL") val rawCardDataJson: String?,
     /**
      * 用户拖动排序后的位置。新卡追加到末尾(取当前 max + 步长),
      * 已有卡迁移时按 createdAt 兜底。reorder 时按 100 步长重写一遍,

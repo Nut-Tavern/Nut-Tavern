@@ -142,6 +142,35 @@ class RegexScriptViewModel @Inject constructor(
         viewModelScope.launch { repository.reorderTopLevel(orderedIds) }
     }
 
+    // ─── 组间移动 ─────────────────────────────────────────────────────────────
+
+    /** 移入正则组:散规则 → 指定组。 */
+    fun moveOrphanToGroup(scriptId: String, targetGroupId: String) {
+        viewModelScope.launch { repository.moveOrphanToGroup(scriptId, targetGroupId) }
+    }
+
+    /** 移出正则组:组内脚本 → 散规则。 */
+    fun moveScriptOutOfGroup(groupId: String, scriptId: String) {
+        viewModelScope.launch { repository.moveScriptOutOfGroup(groupId, scriptId) }
+    }
+
+    /** 迁移到其他正则组:组内脚本 → 另一个组。 */
+    fun moveScriptToOtherGroup(sourceGroupId: String, scriptId: String, targetGroupId: String) {
+        viewModelScope.launch { repository.moveScriptToOtherGroup(sourceGroupId, scriptId, targetGroupId) }
+    }
+
+    /** 拆散正则组:组内所有脚本变为散规则,组删除。 */
+    fun dissolveGroup(groupId: String) {
+        viewModelScope.launch { repository.dissolveGroup(groupId) }
+    }
+
+    // ─── 导入导出 ─────────────────────────────────────────────────────────────
+
+    /** 导入正则脚本。单条作为散规则,多条自动建组。 */
+    fun importScripts(scripts: List<RegexScript>, groupName: String) {
+        viewModelScope.launch { repository.importScripts(scripts, groupName) }
+    }
+
     // ─── 按 id 查规则(编辑路径)─────────────────────────────────────────────
 
     /**

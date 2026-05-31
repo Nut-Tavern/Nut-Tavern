@@ -63,23 +63,25 @@ import javax.inject.Singleton
  * - [SubstituteRegex.ESCAPED]:findRegex 先做占位符替换 + 正则元字符转义(`.` → `\.` 等),
  *   适合"我想匹配字面 user 输入值"的场景,避免名字里的特殊字符破坏 pattern。
  *
- * # 替换串引用语法转换
+ * # 替换串引用语法
+
+ * 替换逻辑**逐次匹配手动解析**,对齐酒馆 engine.js 第 419-445 行,不走 Kotlin Regex.replace
+ * 的反向引用(后者把 `$` 当特殊字符,字面 `$` 与越界组引用会抛异常,且 trimStrings 无法作用到
+ * 单个组值)。支持的引用:
  *
- * 酒馆 [RegexScript.replaceString] 支持三种引用,本引擎都翻译成 Kotlin `Regex.replace` 期望
- * 的反向引用语法:
- *
- * | 酒馆语法 | Kotlin 等价 |
+ * | 酒馆语法 | 行为 |
  * |---|---|
- * | `{{match}}` | `$0`(整个匹配) |
- * | `$<name>` | `${name}`(命名分组) |
- * | `$1` `$2` ... | 原样保留(直接复用 Kotlin 数字分组) |
+ * | `{{match}}` | 先归一成 `$0`,取整个匹配 |
+ * | `$0` | 整个匹配 |
+ * | `$1` `$2` ... | 对应数字捕获组;组不存在 → 空串 |
+ * | `$<name>` | 命名捕获组;无匹配 → 空串 |
  *
- * 翻译之后再做 [PlaceholderResolver] 替换(对应酒馆 engine.js 第 444 行 `substituteParams`)。
+ * 每个取出的组值各自做 trimStrings 删除(作用在组值上,不是整段输入);组替换完成后再做
+ * [PlaceholderResolver] 替换(对应酒馆 engine.js 第 444 行 `substituteParams`)。
  *
  * # 已知偏差(与酒馆相比)
  *
  * - JS sticky `y` flag 不实现:Kotlin Regex 不支持。
- * - 命名分组替换用 `${name}` 而非 `$<name>`:Kotlin Regex 替换串的官方语法。
  * - 不实现 placeholder MD_DISPLAY = 0(已 deprecated)。
  * - 不实现 SLASH_COMMAND placement = 3:本仓库无 slash command 概念。
  */
@@ -137,6 +139,9 @@ class RegexEngine @Inject constructor(
 
     /**
      * 单条脚本执行。匹配失败 / 模式非法 / 引用越界都静默返回原文,不抛异常。
+     *
+     * 替换逻辑对齐酒馆 engine.js 第 418-445 行:**逐次匹配,手动解析引用**,而非把整段
+     * 替换串交给 Kotlin Regex.replace 处理。原因见 [resolveReplacement]。
      */
     fun runRegexScript(
         raw: String,
@@ -149,12 +154,72 @@ class RegexEngine @Inject constructor(
         val options = mapJsFlagsToOptions(flags)
         val regex = runCatching { Regex(pattern, options) }.getOrNull() ?: return raw
 
-        val trimmed = applyTrimStrings(raw, script.trimStrings)
-        // 引用语法转换在前,占位符替换在后,与酒馆 engine.js 第 421-444 行的顺序一致。
-        val translatedReplaceString = translateReplaceReferences(script.replaceString)
-        val finalReplaceString = placeholderResolver.resolve(translatedReplaceString, placeholderContext)
+        return runCatching {
+            regex.replace(raw) { matchResult ->
+                resolveReplacement(matchResult, script, placeholderContext)
+            }
+        }.getOrDefault(raw)
+    }
 
-        return runCatching { regex.replace(trimmed, finalReplaceString) }.getOrDefault(raw)
+    /**
+     * 计算单次匹配的替换文本,对齐酒馆 engine.js 第 419-445 行。
+     *
+     * 流程:
+     * 1. `{{match}}` → `$0`(整匹配);
+     * 2. 用 `\$(\d+)|\$<([^>]+)>` 逐个解析引用,从 [matchResult] 取对应组值;
+     *    引用不存在(组越界 / 命名组无匹配)→ 替换成空串(酒馆 engine.js 第 433-435 行);
+     * 3. 每个取出的组值各自做 trimStrings 删除(作用在**组值**上,不是整段输入,
+     *    对齐酒馆 filterString,engine.js 第 438 行);
+     * 4. 整串组替换完成后做占位符替换(酒馆 substituteParams,engine.js 第 444 行)。
+     *
+     * # 为什么不用 Kotlin Regex.replace 的反向引用
+     *
+     * Kotlin/Java 替换串把 `$` 当特殊字符,字面 `$` 或越界组引用会抛 IllegalArgumentException;
+     * trimStrings 也无法作用到单个组值。手动解析才能 1:1 复刻酒馆行为。
+     *
+     * # 与酒馆的有意差异
+     *
+     * 数字组越界严格按真实组数兜底(`groupValues.getOrNull` → 空串),不复刻酒馆 `args[num]`
+     * 在越界时可能命中 JS replace 回调尾部参数(offset / string / groups)的旧行为。
+     * "越界 → 空串"更符合用户直觉,且测试已锁(missingNumberedGroupReferenceBecomesEmpty)。
+     */
+    private fun resolveReplacement(
+        matchResult: MatchResult,
+        script: RegexScript,
+        placeholderContext: PlaceholderContext,
+    ): String {
+        // 用 lambda 形式回填字面 "$0":两参 replace 会把替换串里的 $0 当成反向引用,
+        // 这里要的是字面文本 $0 以供下游 GROUP_REFERENCE_REGEX 当"整匹配"解析。
+        val withMatchMacro = MATCH_MACRO_REGEX.replace(script.replaceString) { "\$0" }
+        val withGroups = GROUP_REFERENCE_REGEX.replace(withMatchMacro) { ref ->
+            val numbered = ref.groupValues[1]
+            val named = ref.groupValues[2]
+            val groupValue = when {
+                numbered.isNotEmpty() -> matchResult.groupValues.getOrNull(numbered.toInt())
+                // 命名组不存在时 Kotlin groups[name] 抛 IllegalArgumentException,而非返回 null。
+                named.isNotEmpty() -> runCatching { matchResult.groups[named]?.value }.getOrNull()
+                else -> null
+            }
+            if (groupValue.isNullOrEmpty()) "" else filterTrimStrings(groupValue, script.trimStrings, placeholderContext)
+        }
+        return placeholderResolver.resolve(withGroups, placeholderContext)
+    }
+
+    /**
+     * 从组值里删除 trimStrings 片段。每个 trimString 先做占位符替换,再整体删除。
+     * 对齐酒馆 filterString(engine.js 第 457-464 行)。
+     */
+    private fun filterTrimStrings(
+        value: String,
+        trimStrings: List<String>,
+        placeholderContext: PlaceholderContext,
+    ): String {
+        if (trimStrings.isEmpty()) return value
+        return trimStrings.fold(value) { acc, fragment ->
+            if (fragment.isEmpty()) return@fold acc
+            val resolved = placeholderResolver.resolve(fragment, placeholderContext)
+            if (resolved.isEmpty()) acc else acc.replace(resolved, "")
+        }
     }
 
     /**
@@ -222,13 +287,6 @@ class RegexEngine @Inject constructor(
         return options
     }
 
-    private fun applyTrimStrings(raw: String, trimStrings: List<String>): String {
-        if (trimStrings.isEmpty()) return raw
-        return trimStrings.fold(raw) { acc, fragment ->
-            if (fragment.isEmpty()) acc else acc.replace(fragment, "")
-        }
-    }
-
     /**
      * Find Regex 预处理。对齐酒馆 engine.js 第 397-409 行 `substituteRegex` 的作用点。
      *
@@ -290,14 +348,14 @@ class RegexEngine @Inject constructor(
         }
     }
 
-    /**
-     * 把酒馆替换串里的 `{{match}}` 翻译成 Kotlin `$0`,`$<name>` 翻译成 `${name}`。
-     */
-    private fun translateReplaceReferences(replaceString: String): String {
-        var result = replaceString.replace("{{match}}", "$0")
-        // 命名分组:$<name> -> ${name},命名只允许字母数字下划线。
-        val namedGroupRef = Regex("""\$<([A-Za-z][A-Za-z0-9_]*)>""")
-        result = namedGroupRef.replace(result) { match -> "\${${match.groupValues[1]}}" }
-        return result
+    private companion object {
+        /** `{{match}}`(忽略大小写)→ `$0`。对齐酒馆 engine.js 第 421 行 `/{{match}}/gi`。 */
+        val MATCH_MACRO_REGEX = Regex("\\{\\{match\\}\\}", RegexOption.IGNORE_CASE)
+
+        /**
+         * 替换串引用解析:`$1`(数字组)或 `$<name>`(命名组)。
+         * 对齐酒馆 engine.js 第 422 行 `/\$(\d+)|\$<([^>]+)>/g`。
+         */
+        val GROUP_REFERENCE_REGEX = Regex("\\$(\\d+)|\\$<([^>]+)>")
     }
 }

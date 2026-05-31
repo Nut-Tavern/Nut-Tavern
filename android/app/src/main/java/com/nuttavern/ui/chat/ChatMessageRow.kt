@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -25,16 +27,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.RefreshCcw
 import com.composables.icons.lucide.Trash2
 import com.nuttavern.data.model.GeneratedContentSanitizer
+import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
@@ -92,6 +97,16 @@ internal fun ChatMessageRow(
                 isStreaming = false,
             )
             Spacer(modifier = Modifier.height(4.dp))
+        }
+        if (isUserMessage && message.attachments.isNotEmpty()) {
+            MessageAttachmentImages(
+                attachments = message.attachments,
+                maxMessageWidth = maxMessageWidth,
+                alignment = alignment,
+            )
+            if (visibleContent.isNotBlank()) {
+                Spacer(modifier = Modifier.height(4.dp))
+            }
         }
         if (visibleContent.isNotBlank()) {
             if (isUserMessage) {
@@ -154,6 +169,40 @@ internal fun ChatMessageRow(
                 onDeleteMessage(message)
             },
         )
+    }
+}
+
+/**
+ * 用户消息已发送的图片缩略图。横向排列,与气泡同侧对齐(用户消息靠右)。
+ * 最多展示原图缩放后的方形缩略,点击预览后续接入(当前只展示)。
+ */
+@Composable
+private fun MessageAttachmentImages(
+    attachments: List<ImageAttachment>,
+    maxMessageWidth: Dp,
+    alignment: Alignment,
+) {
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = alignment,
+    ) {
+        Row(
+            modifier = Modifier
+                .widthIn(max = maxMessageWidth)
+                .wrapContentWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            attachments.forEach { attachment ->
+                AsyncImage(
+                    model = attachment.path,
+                    contentDescription = "已发送图片",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(120.dp)
+                        .clip(MaterialTheme.shapes.medium),
+                )
+            }
+        }
     }
 }
 

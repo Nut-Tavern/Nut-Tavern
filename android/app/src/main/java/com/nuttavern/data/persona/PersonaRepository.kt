@@ -33,4 +33,26 @@ interface PersonaRepository {
      * - 实现层不应允许 [UserPersona.NONE_PERSONA_ID] 出现在入参里。
      */
     suspend fun reorder(orderedIds: List<String>)
+
+    /**
+     * 清除所有身份中对指定世界书的绑定引用。
+     *
+     * 当世界书被删除时调用,避免悬空引用。
+     */
+    suspend fun clearLorebookBinding(lorebookId: String)
+
+    /**
+     * 清除所有身份中对指定角色的绑定引用。
+     *
+     * 当角色被删除时调用,避免悬空引用。
+     */
+    suspend fun clearCharacterConnection(characterId: String)
+
+    /**
+     * 把头像字节写入 `filesDir/personas/{id}.{ext}`,返回可存进 [UserPersona.avatarPath] 的绝对路径。
+     * 同一身份换头像时先清掉其它扩展名的旧文件,避免残留。
+     *
+     * @throws IllegalArgumentException id 含路径分隔符 / 扩展名不支持时抛出
+     */
+    fun saveAvatarBytes(personaId: String, bytes: ByteArray, extension: String): String
 }

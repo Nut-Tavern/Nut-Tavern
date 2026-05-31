@@ -24,6 +24,7 @@ import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.regex.RegexScript
 import com.nuttavern.ui.character.CharacterAvatarPlaceholder
+import com.nuttavern.ui.persona.PersonaAvatarPlaceholder
 import com.nuttavern.ui.character.NEW_CHARACTER_PLACEHOLDER_ID
 import com.nuttavern.ui.character.characterSubtitleDisplay
 import com.nuttavern.ui.components.NutTavernGroupDivider
@@ -44,8 +45,7 @@ import com.nuttavern.ui.preset.presetSubtitleDisplay
  *   未绑定时显示"未选择角色 / 点击新建角色卡",leading 退化为通用图标。点击走
  *   [onNavigateToCharacterDetail]:已绑定跳对应编辑页,未绑定跳新建占位 id。
  * - 用户身份:[currentPersona] = null 时显示"无"伪卡占位文案;非 null 时显示具体身份信息。
- *   leading 暂用 [Lucide.UserRound] 普通图标,后端阶段头像选择接入后再切到带头像的
- *   PersonaAvatarPlaceholder。
+ *   leading 走 [PersonaAvatarPlaceholder](有头像走 Coil,无头像 / 伪卡走占位)。
  * - 预设:仓库永远有兜底默认预设,因此 [currentPreset] 通常不为 null;为 null 时按"默认预设"
  *   占位提示。点击 → 调 [onOpenPresetPicker] 弹 PresetPickerSheet 切换预设。
  * - 正则:显示当前启用的全局正则数(总数 / 启用数);点击 → 调 [onOpenRegexPicker] 弹
@@ -164,6 +164,7 @@ private fun CharacterEntryRow(
     NutTavernIconRow(
         leading = {
             CharacterAvatarPlaceholder(
+                avatarPath = character.avatarPath,
                 modifier = Modifier.size(NutTavernGroupTokens.IconRowLeadingIconSize),
             )
         },
@@ -183,19 +184,16 @@ private fun PersonaEntryRow(
     persona: UserPersona?,
     onClick: () -> Unit,
 ) {
-    val primary: String
-    val subtitle: String
-    if (persona == null) {
-        primary = personaPrimaryDisplay(UserPersona.None)
-        subtitle = personaSubtitleDisplay(UserPersona.None)
-    } else {
-        primary = personaPrimaryDisplay(persona)
-        subtitle = personaSubtitleDisplay(persona)
-    }
+    val resolvedPersona = persona ?: UserPersona.None
     NutTavernIconRow(
-        icon = Lucide.UserRound,
-        title = primary,
-        subtitle = subtitle,
+        leading = {
+            PersonaAvatarPlaceholder(
+                persona = resolvedPersona,
+                modifier = Modifier.size(NutTavernGroupTokens.IconRowLeadingIconSize),
+            )
+        },
+        title = personaPrimaryDisplay(resolvedPersona),
+        subtitle = personaSubtitleDisplay(resolvedPersona),
         showTrailingChevron = true,
         onClick = onClick,
     )

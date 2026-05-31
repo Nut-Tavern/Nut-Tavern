@@ -24,7 +24,7 @@ import kotlinx.serialization.Serializable
  * - `function_calling`(工具总开关)→ MCP 走"单工具开关"模型,不需要总开关。
  * - `enable_web_search` → Provider 模块按 Provider 提供能力(Gemini 已做)。
  * - `show_thoughts` → 客户端 UI 行为,默认永远展示,不暴露开关。
- * - `reasoning_effort` → 走 ChatViewModel.draftThinkingLevel 会话级控制。
+ * - `reasoning_effort` → 走 ChatViewModel.currentThinkingLevel 会话级控制。
  * - `verbosity` → 移入 [com.nuttavern.data.character.Character.verbosity],绑角色。
  * - `request_images` / `request_image_aspect_ratio` / `request_image_resolution` →
  *   Provider 模块图片生成功能上线时落地。

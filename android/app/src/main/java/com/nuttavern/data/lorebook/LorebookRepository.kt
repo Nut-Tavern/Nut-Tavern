@@ -10,7 +10,9 @@ import javax.inject.Singleton
 /**
  * 世界书仓库。管理用户级世界书的 CRUD + 全局选中 + 排序。
  *
- * 角色内嵌世界书(character_book)不经过本仓库,由 LorebookEngine 直接从 Character 读取。
+ * 角色世界书 / 辅助世界书都是独立世界书(存本仓库),角色卡只存引用 id
+ * (characterLorebookId / lorebookIds);运行时由 ChatViewModel 取出后交给 LorebookEngine。
+ * 角色内嵌 character_book 仅作 V3 导入导出携带位,运行时不消费(见 docs/modules/lorebook.md)。
  */
 @Singleton
 class LorebookRepository @Inject constructor(

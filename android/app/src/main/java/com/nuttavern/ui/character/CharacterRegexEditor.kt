@@ -1,6 +1,9 @@
 package com.nuttavern.ui.character
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,16 +35,22 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Check
+import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileDown
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Trash2
 import com.nuttavern.data.regex.RegexScript
+import com.nuttavern.ui.components.EntityAction
+import com.nuttavern.ui.components.NutTavernEntityActionsSheet
 import com.nuttavern.ui.regex.RegexScriptFormBody
 import java.util.UUID
+import kotlinx.serialization.json.Json
 
 /**
  * 角色专属正则脚本编辑器(SCOPED 作用域)。
@@ -71,7 +80,42 @@ internal fun CharacterRegexEditor(
     onBack: () -> Unit,
 ) {
     var editingScript by remember { mutableStateOf<RegexScript?>(null) }
+    var longPressScript by remember { mutableStateOf<RegexScript?>(null) }
     BackHandler { onBack() }
+
+    val context = LocalContext.current
+    val regexJson = remember { Json { ignoreUnknownKeys = true; encodeDefaults = true } }
+
+    // 导入角色专属正则:解析酒馆 JSON(单对象/数组),重分配 UUID 后平铺追加到当前列表。
+    // SCOPED 无组概念,单条/多条都直接追加。
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        try {
+            val text = context.contentResolver.openInputStream(uri)
+                ?.bufferedReader()?.readText()
+                ?: return@rememberLauncherForActivityResult
+            val imported: List<RegexScript> = try {
+                regexJson.decodeFromString<List<RegexScript>>(text)
+            } catch (_: Exception) {
+                listOf(regexJson.decodeFromString<RegexScript>(text))
+            }
+            val reassigned = imported.map { it.copy(id = UUID.randomUUID().toString()) }
+            onChange(scripts + reassigned)
+            android.widget.Toast.makeText(
+                context,
+                "已导入 ${reassigned.size} 条正则",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        } catch (e: Exception) {
+            android.widget.Toast.makeText(
+                context,
+                "导入失败: ${e.message}",
+                android.widget.Toast.LENGTH_SHORT,
+            ).show()
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -83,6 +127,9 @@ internal fun CharacterRegexEditor(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
+                        Icon(Lucide.FileDown, contentDescription = "导入正则")
+                    }
                     IconButton(
                         onClick = {
                             editingScript = RegexScript(
@@ -127,6 +174,7 @@ internal fun CharacterRegexEditor(
                     CharacterRegexRow(
                         script = script,
                         onClick = { editingScript = script },
+                        onLongClick = { longPressScript = script },
                         onToggleEnabled = { enabled ->
                             onChange(
                                 scripts.map {
@@ -164,12 +212,44 @@ internal fun CharacterRegexEditor(
             onBack = { editingScript = null },
         )
     }
+
+    val longPressed = longPressScript
+    if (longPressed != null) {
+        NutTavernEntityActionsSheet(
+            title = longPressed.scriptName.ifBlank { "未命名规则" },
+            actions = listOf(
+                EntityAction(
+                    icon = Lucide.Copy,
+                    title = "复制",
+                    onClick = {
+                        val copy = longPressed.copy(
+                            id = UUID.randomUUID().toString(),
+                            scriptName = longPressed.scriptName + "*",
+                        )
+                        val index = scripts.indexOfFirst { it.id == longPressed.id }
+                        val nextScripts = scripts.toMutableList().apply {
+                            if (index >= 0) add(index + 1, copy) else add(copy)
+                        }
+                        onChange(nextScripts)
+                    },
+                ),
+                EntityAction(
+                    icon = Lucide.Trash2,
+                    title = "删除",
+                    destructive = true,
+                    onClick = { onChange(scripts.filterNot { it.id == longPressed.id }) },
+                ),
+            ),
+            onDismiss = { longPressScript = null },
+        )
+    }
 }
 
 @Composable
 private fun CharacterRegexRow(
     script: RegexScript,
     onClick: () -> Unit,
+    onLongClick: () -> Unit,
     onToggleEnabled: (Boolean) -> Unit,
 ) {
     com.nuttavern.ui.components.NutTavernEntityCard(
@@ -177,6 +257,7 @@ private fun CharacterRegexRow(
         titleFallback = "未命名规则",
         subtitle = script.findRegex.takeIf { it.isNotBlank() },
         onClick = onClick,
+        onLongClick = onLongClick,
         trailing = {
             com.nuttavern.ui.components.NutTavernEntitySwitch(
                 checked = !script.disabled,

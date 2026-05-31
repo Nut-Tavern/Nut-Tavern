@@ -25,7 +25,6 @@ import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.Trash2
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.ui.character.CharacterCard
-import com.nuttavern.ui.character.CharacterEditIconButton
 import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
 import com.nuttavern.ui.components.NutTavernIconRow

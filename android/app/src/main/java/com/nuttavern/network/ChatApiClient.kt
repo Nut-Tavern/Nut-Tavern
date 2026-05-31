@@ -60,11 +60,12 @@ class ChatApiClient @Inject constructor() {
         model: Model,
         messages: List<ChatMessage>,
         systemPrompt: String? = null,
-        thinkingLevel: ThinkingLevel = ThinkingLevel.MEDIUM,
+        thinkingLevel: ThinkingLevel = ThinkingLevel.Auto,
         generationParams: GenerationParams = GenerationParams.Empty,
     ): Flow<ChatStreamChunk> {
         val effective = effectiveProvider(provider, model)
-        // 预设可以覆盖 ChatViewModel 草稿级别;预设没指定时仍用草稿级别。
+        // thinkingLevel 是会话级思考量(ChatViewModel.currentThinkingLevel)。预设级覆盖
+        // (thinkingLevelOverride)是前向 hook,当前 PromptComposer 恒传 null,故实际走会话级。
         val effectiveThinking = generationParams.thinkingLevelOverride ?: thinkingLevel
         return when (effective) {
             is Provider.OpenAI -> {
@@ -541,8 +542,27 @@ class ChatApiClient @Inject constructor() {
         }
         messages.forEach { msg ->
             val role = normalizeOpenAIRole(msg.role)
-            if (role.isNotBlank() && msg.content.isNotBlank()) {
-                jsonMessages.put(JSONObject().put("role", role).put("content", msg.content))
+            if (role.isBlank()) return@forEach
+            if (msg.images.isEmpty()) {
+                if (msg.content.isNotBlank()) {
+                    jsonMessages.put(JSONObject().put("role", role).put("content", msg.content))
+                }
+            } else {
+                // 带图消息:content 用 parts 数组,文本块 + 每张图一个 image_url(data URL)。
+                val parts = JSONArray()
+                if (msg.content.isNotBlank()) {
+                    parts.put(JSONObject().put("type", "text").put("text", msg.content))
+                }
+                msg.images.forEach { image ->
+                    parts.put(
+                        JSONObject()
+                            .put("type", "image_url")
+                            .put("image_url", JSONObject().put("url", image.toDataUrl())),
+                    )
+                }
+                if (parts.length() > 0) {
+                    jsonMessages.put(JSONObject().put("role", role).put("content", parts))
+                }
             }
         }
         val request = JSONObject()
@@ -553,10 +573,12 @@ class ChatApiClient @Inject constructor() {
         applyOpenAIGenerationParams(request, generationParams)
 
         if (model.abilities.contains(ModelAbility.REASONING)) {
-            // OpenAI Responses / GPT-5 / o-series 用 reasoning_effort,值低/中/高与 ThinkingLevel 一致。
-            // 走 ChatViewModel 会话级 thinkingLevel(由 generationParams.thinkingLevelOverride 透传)。
-            val effort = (generationParams.thinkingLevelOverride ?: thinkingLevel).name.lowercase()
-            request.put("reasoning_effort", effort)
+            // OpenAI Chat 用 reasoning_effort 字符串档位。会话级 thinkingLevel 经
+            // generationParams.thinkingLevelOverride 透传到这里(见 streamChat:effectiveThinking)。
+            // 自动档返回 null = 不发送字段。
+            ThinkingLevelMapping.toOpenAIEffort(thinkingLevel)?.let {
+                request.put("reasoning_effort", it)
+            }
         }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
@@ -614,14 +636,32 @@ class ChatApiClient @Inject constructor() {
         val input = JSONArray()
         messages.forEach { msg ->
             val role = normalizeOpenAIRole(msg.role)
-            if (role.isBlank() || msg.content.isBlank()) return@forEach
-            val partType = if (role == "assistant") "output_text" else "input_text"
-            val parts = JSONArray().put(
-                JSONObject()
-                    .put("type", partType)
-                    .put("text", msg.content),
-            )
-            input.put(JSONObject().put("role", role).put("content", parts))
+            if (role.isBlank()) return@forEach
+            if (role == "assistant" || msg.images.isEmpty()) {
+                // assistant 不带图;无图消息走单文本块。
+                if (msg.content.isBlank()) return@forEach
+                val partType = if (role == "assistant") "output_text" else "input_text"
+                val parts = JSONArray().put(
+                    JSONObject().put("type", partType).put("text", msg.content),
+                )
+                input.put(JSONObject().put("role", role).put("content", parts))
+            } else {
+                // 带图 user 消息:input_text + 每张图一个 input_image(data URL)。
+                val parts = JSONArray()
+                if (msg.content.isNotBlank()) {
+                    parts.put(JSONObject().put("type", "input_text").put("text", msg.content))
+                }
+                msg.images.forEach { image ->
+                    parts.put(
+                        JSONObject()
+                            .put("type", "input_image")
+                            .put("image_url", image.toDataUrl()),
+                    )
+                }
+                if (parts.length() > 0) {
+                    input.put(JSONObject().put("role", role).put("content", parts))
+                }
+            }
         }
         val request = JSONObject()
             .put("model", model.modelId)
@@ -637,9 +677,11 @@ class ChatApiClient @Inject constructor() {
         generationParams.maxTokens?.let { request.put("max_output_tokens", it) }
         generationParams.seed?.let { if (it >= 0) request.put("seed", it) }
         if (model.abilities.contains(ModelAbility.REASONING)) {
-            val effort = (generationParams.thinkingLevelOverride ?: thinkingLevel).name.lowercase()
             // Responses API 用 reasoning 对象,字段叫 effort;另外可选 summary,这里不开。
-            request.put("reasoning", JSONObject().put("effort", effort))
+            // 自动档返回 null = 不发送 reasoning。
+            ThinkingLevelMapping.toOpenAIEffort(thinkingLevel)?.let {
+                request.put("reasoning", JSONObject().put("effort", it))
+            }
         }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
@@ -660,18 +702,38 @@ class ChatApiClient @Inject constructor() {
         val lastUserIndex = if (promptCaching) messages.indexOfLast { normalizeClaudeRole(it.role) == "user" } else -1
         messages.forEachIndexed { index, msg ->
             val role = normalizeClaudeRole(msg.role)
-            if (role.isNotBlank() && msg.content.isNotBlank()) {
-                val msgObj = JSONObject().put("role", role)
-                if (index == lastUserIndex) {
-                    msgObj.put(
-                        "content",
-                        JSONArray().put(buildClaudeTextBlockWithCache(msg.content, promptCacheTtl)),
-                    )
-                } else {
-                    msgObj.put("content", msg.content)
+            if (role.isBlank()) return@forEachIndexed
+            val hasContent = msg.content.isNotBlank()
+            val hasImages = msg.images.isNotEmpty()
+            if (!hasContent && !hasImages) return@forEachIndexed
+
+            val msgObj = JSONObject().put("role", role)
+            if (hasImages) {
+                // 带图消息:content 用 block 数组,图片块在前、文本块在后(对齐 Anthropic 示例)。
+                // cache_control 只打在最后一个文本块(若是缓存目标),与纯文本路径语义一致。
+                val blocks = JSONArray()
+                msg.images.forEach { image ->
+                    blocks.put(buildClaudeImageBlock(image))
                 }
-                jsonMessages.put(msgObj)
+                if (hasContent) {
+                    blocks.put(
+                        if (index == lastUserIndex) {
+                            buildClaudeTextBlockWithCache(msg.content, promptCacheTtl)
+                        } else {
+                            JSONObject().put("type", "text").put("text", msg.content)
+                        },
+                    )
+                }
+                msgObj.put("content", blocks)
+            } else if (index == lastUserIndex) {
+                msgObj.put(
+                    "content",
+                    JSONArray().put(buildClaudeTextBlockWithCache(msg.content, promptCacheTtl)),
+                )
+            } else {
+                msgObj.put("content", msg.content)
             }
+            jsonMessages.put(msgObj)
         }
         val request = JSONObject()
             .put("model", model.modelId)
@@ -700,17 +762,11 @@ class ChatApiClient @Inject constructor() {
             }
         }
         if (model.abilities.contains(ModelAbility.REASONING)) {
-            // Claude extended thinking: type=enabled + budget_tokens。
-            // budget_tokens 取一个保守的预算映射,避免直接喂大数把 max_tokens 吃完。
-            val budget = when (thinkingLevel) {
-                ThinkingLevel.LOW -> 1_024
-                ThinkingLevel.MEDIUM -> 4_096
-                ThinkingLevel.HIGH -> 16_384
+            // Claude extended thinking: {type:"enabled", budget_tokens:N}。budget 钳到
+            // [1024, max_tokens-1];关闭 / 自动返回 null = 不发送 thinking 字段。
+            ThinkingLevelMapping.toClaudeThinking(thinkingLevel, generationParams.maxTokens)?.let {
+                request.put("thinking", it)
             }
-            val thinking = JSONObject()
-                .put("type", "enabled")
-                .put("budget_tokens", budget)
-            request.put("thinking", thinking)
         }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
@@ -732,6 +788,17 @@ class ChatApiClient @Inject constructor() {
             .put("cache_control", cacheControl)
     }
 
+    /** Claude 图片块:`{type:"image", source:{type:"base64", media_type, data}}`。 */
+    private fun buildClaudeImageBlock(image: ChatImage): JSONObject {
+        val source = JSONObject()
+            .put("type", "base64")
+            .put("media_type", image.mimeType)
+            .put("data", image.base64Data)
+        return JSONObject()
+            .put("type", "image")
+            .put("source", source)
+    }
+
     private fun buildGeminiRequest(
         model: Model,
         messages: List<ChatMessage>,
@@ -742,13 +809,27 @@ class ChatApiClient @Inject constructor() {
         val contents = JSONArray()
         for (msg in messages) {
             val role = normalizeGeminiRole(msg.role)
-            if (role.isNotBlank() && msg.content.isNotBlank()) {
-                contents.put(
-                    JSONObject()
-                        .put("role", role)
-                        .put("parts", JSONArray().put(JSONObject().put("text", msg.content))),
+            if (role.isBlank()) continue
+            val hasContent = msg.content.isNotBlank()
+            val hasImages = msg.images.isNotEmpty()
+            if (!hasContent && !hasImages) continue
+
+            val parts = JSONArray()
+            if (hasContent) {
+                parts.put(JSONObject().put("text", msg.content))
+            }
+            // Gemini REST 用 snake_case:inline_data.mime_type / data(裸 base64)。
+            msg.images.forEach { image ->
+                parts.put(
+                    JSONObject().put(
+                        "inline_data",
+                        JSONObject()
+                            .put("mime_type", image.mimeType)
+                            .put("data", image.base64Data),
+                    ),
                 )
             }
+            contents.put(JSONObject().put("role", role).put("parts", parts))
         }
 
         val requestBody = JSONObject().put("contents", contents)
@@ -770,11 +851,11 @@ class ChatApiClient @Inject constructor() {
         }
 
         if (model.abilities.contains(ModelAbility.REASONING)) {
-            // Gemini thinkingConfig.thinkingBudget:Pro/Flash 接受 thinkingLevel 字符串或 budget tokens。
-            // 这里走 thinkingLevel 字符串,值取 low / medium / high。
-            val effort = (generationParams.thinkingLevelOverride ?: thinkingLevel).name.lowercase()
-            val thinkingConfig = JSONObject().put("thinkingLevel", effort)
-            generationConfig.put("thinkingConfig", thinkingConfig)
+            // Gemini thinkingConfig:Effort 档发 thinkingLevel 字符串,关闭 / 自定义发
+            // thinkingBudget 整数;自动返回 null = 不发送 thinkingConfig。
+            ThinkingLevelMapping.toGeminiThinkingConfig(thinkingLevel)?.let {
+                generationConfig.put("thinkingConfig", it)
+            }
         }
         if (generationConfig.length() > 0) {
             requestBody.put("generationConfig", generationConfig)

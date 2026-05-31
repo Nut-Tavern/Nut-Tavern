@@ -1,5 +1,8 @@
 package com.nuttavern.ui.preset
 
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -41,6 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.composables.icons.lucide.ArrowLeft
 import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.FileDown
 import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.Check
@@ -48,6 +52,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.Search
 import com.nuttavern.data.preset.Preset
+import com.nuttavern.ui.io.resolveImportFileName
 import com.nuttavern.ui.components.NutTavernShapeTokens
 import com.nuttavern.ui.viewmodel.PresetViewModel
 import sh.calvin.reorderable.ReorderableItem
@@ -79,6 +84,49 @@ fun PresetListScreen(
     var query by remember { mutableStateOf("") }
     val context = androidx.compose.ui.platform.LocalContext.current
 
+    // 导入酒馆预设 JSON:文件名作预设名,codec 解析失败 Toast 报错不写入。
+    val importLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        val text = runCatching {
+            context.contentResolver.openInputStream(uri)?.bufferedReader()?.readText()
+        }.getOrNull()
+        if (text.isNullOrBlank()) {
+            android.widget.Toast.makeText(context, "无法读取文件", android.widget.Toast.LENGTH_SHORT).show()
+            return@rememberLauncherForActivityResult
+        }
+        val presetName = uri.resolveImportFileName(context, fallback = "导入预设")
+        viewModel.importFromSillyTavern(
+            jsonText = text,
+            presetName = presetName,
+            onSuccess = { name ->
+                android.widget.Toast.makeText(context, "已导入预设「$name」", android.widget.Toast.LENGTH_SHORT).show()
+            },
+            onError = { message ->
+                android.widget.Toast.makeText(context, "导入失败: $message", android.widget.Toast.LENGTH_SHORT).show()
+            },
+        )
+    }
+
+    // 导出酒馆预设 JSON:先由 ViewModel 备好文本,再用 CreateDocument 写文件。
+    var pendingExportJson by remember { mutableStateOf<String?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri: Uri? ->
+        val json = pendingExportJson
+        pendingExportJson = null
+        if (uri == null || json == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { it.write(json) }
+        }.isSuccess
+        android.widget.Toast.makeText(
+            context,
+            if (ok) "导出成功" else "导出失败",
+            android.widget.Toast.LENGTH_SHORT,
+        ).show()
+    }
+
     val isFiltering = query.isNotBlank()
     val filteredItems = remember(items, query) {
         if (!isFiltering) items
@@ -99,6 +147,9 @@ fun PresetListScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { importLauncher.launch(arrayOf("application/json")) }) {
+                        Icon(Lucide.FileDown, contentDescription = "导入预设")
+                    }
                     IconButton(onClick = { onOpenPresetDetail(NEW_PRESET_PLACEHOLDER_ID) }) {
                         Icon(Lucide.Plus, contentDescription = "新增预设")
                     }
@@ -171,7 +222,10 @@ fun PresetListScreen(
                     icon = Lucide.FileUp,
                     title = "导出",
                     onClick = {
-                        android.widget.Toast.makeText(context, "功能开发中", android.widget.Toast.LENGTH_SHORT).show()
+                        viewModel.exportToSillyTavern(lp.id) { fileName, jsonText ->
+                            pendingExportJson = jsonText
+                            exportLauncher.launch("$fileName.json")
+                        }
                     },
                 ))
                 if (!lp.isBuiltInDefault) {

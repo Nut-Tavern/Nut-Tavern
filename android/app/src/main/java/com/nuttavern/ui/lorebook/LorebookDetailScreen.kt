@@ -57,6 +57,7 @@ import com.nuttavern.ui.components.NutTavernIconRow
 import com.nuttavern.ui.components.NutTavernLabeledTextField
 import com.nuttavern.ui.components.NutTavernNumericField
 import com.nuttavern.ui.components.NumericParser
+import com.nuttavern.ui.components.NutTavernSwitchRow
 import com.nuttavern.ui.viewmodel.LorebookViewModel
 import sh.calvin.reorderable.ReorderableItem
 import sh.calvin.reorderable.rememberReorderableLazyListState
@@ -594,35 +595,35 @@ private fun SettingsTab(
 
         item(key = "flags") {
             NutTavernGroupSection {
-                SwitchRow(
+                NutTavernSwitchRow(
                     label = "递归扫描",
                     subtitle = "激活条目的内容可以触发其他条目",
                     checked = draft.recursiveScanning,
                     onCheckedChange = { onDraftChange(draft.copy(recursiveScanning = it)) },
                 )
                 NutTavernGroupDivider()
-                SwitchRow(
+                NutTavernSwitchRow(
                     label = "大小写敏感",
                     subtitle = "关键词匹配区分大小写",
                     checked = draft.caseSensitive,
                     onCheckedChange = { onDraftChange(draft.copy(caseSensitive = it)) },
                 )
                 NutTavernGroupDivider()
-                SwitchRow(
+                NutTavernSwitchRow(
                     label = "整词匹配",
                     subtitle = "关键词必须是完整单词,不匹配子串",
                     checked = draft.matchWholeWords,
                     onCheckedChange = { onDraftChange(draft.copy(matchWholeWords = it)) },
                 )
                 NutTavernGroupDivider()
-                SwitchRow(
+                NutTavernSwitchRow(
                     label = "包含发言者名称",
                     subtitle = "扫描缓冲区每条消息前加\"Name: \"",
                     checked = draft.includeNames,
                     onCheckedChange = { onDraftChange(draft.copy(includeNames = it)) },
                 )
                 NutTavernGroupDivider()
-                SwitchRow(
+                NutTavernSwitchRow(
                     label = "互斥组评分模式",
                     subtitle = "同组条目按关键词命中数竞争,得分低的淘汰",
                     checked = draft.useGroupScoring,
@@ -642,34 +643,6 @@ private fun SettingsTab(
                 )
             }
         }
-    }
-}
-
-@Composable
-private fun SwitchRow(
-    label: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    subtitle: String? = null,
-) {
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(text = label, style = MaterialTheme.typography.bodyLarge)
-            if (!subtitle.isNullOrBlank()) {
-                Text(
-                    text = subtitle,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-        androidx.compose.material3.Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

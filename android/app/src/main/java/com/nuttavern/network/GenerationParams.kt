@@ -21,8 +21,8 @@ package com.nuttavern.network
  * - [verbosityRawValue] → 来自 [com.nuttavern.data.character.Character.verbosity],按角色绑定;
  * - [customPostProcessing] → 来自当前 [com.nuttavern.data.model.Provider] 的
  *   `customPromptPostProcessing` 字段;
- * - [thinkingLevelOverride] → 来自会话级 [ChatViewModel.draftThinkingLevel],对应酒馆
- *   `reasoning_effort` 字段(我们用 ThinkingLevel 表达,内部映射到各 Provider)。
+ * - [thinkingLevelOverride] → 来自会话级 [ChatViewModel.currentThinkingLevel],对应 reasoning
+ *   effort(我们用 ThinkingLevel 表达,内部映射到各 Provider,见 [ThinkingLevelMapping])。
  *
  * # 字段选择
  *

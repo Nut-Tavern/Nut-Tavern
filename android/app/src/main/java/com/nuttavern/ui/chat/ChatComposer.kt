@@ -1,11 +1,16 @@
 package com.nuttavern.ui.chat
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -16,14 +21,17 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -33,11 +41,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Camera
 import com.composables.icons.lucide.Check
@@ -50,6 +62,9 @@ import com.composables.icons.lucide.Maximize2
 import com.composables.icons.lucide.Paperclip
 import com.composables.icons.lucide.Send
 import com.composables.icons.lucide.Server
+import com.composables.icons.lucide.X
+import com.nuttavern.data.model.EffortTier
+import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Provider
 import com.nuttavern.data.model.ThinkingLevel
 import com.nuttavern.ui.components.NutTavernAlphaTokens
@@ -58,6 +73,8 @@ import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
 import com.nuttavern.ui.components.NutTavernIconRow
+import com.nuttavern.ui.components.NutTavernNumericField
+import com.nuttavern.ui.components.NumericParser
 import com.nuttavern.ui.components.NutTavernInputActionButton
 import com.nuttavern.ui.components.NutTavernInputPrimaryButton
 import com.nuttavern.ui.components.NutTavernInputToolbarButton
@@ -73,7 +90,11 @@ fun ChatComposer(
     isReplying: Boolean,
     currentProvider: Provider?,
     currentModelName: String,
-    draftThinkingLevel: ThinkingLevel,
+    currentThinkingLevel: ThinkingLevel,
+    pendingAttachments: List<ImageAttachment>,
+    imageInputSupported: Boolean,
+    onAddImage: (ByteArray, String) -> Unit,
+    onRemoveImage: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSendDraft: (String) -> Unit,
@@ -83,6 +104,21 @@ fun ChatComposer(
 ) {
     var draftEditorVisible by remember { mutableStateOf(false) }
     var activeSheet by remember { mutableStateOf<ComposerSheet?>(null) }
+
+    val context = LocalContext.current
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        if (uri != null) {
+            val resolver = context.contentResolver
+            val mime = resolver.getType(uri) ?: "image/jpeg"
+            // 读 URI 字节在主线程做一次性小 IO;大图上限由 ViewModel 校验拒绝。
+            val bytes = runCatching {
+                resolver.openInputStream(uri)?.use { it.readBytes() }
+            }.getOrNull()
+            if (bytes != null) onAddImage(bytes, mime)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -111,6 +147,13 @@ fun ChatComposer(
                     .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
+                if (pendingAttachments.isNotEmpty()) {
+                    PendingAttachmentStrip(
+                        attachments = pendingAttachments,
+                        onRemove = onRemoveImage,
+                    )
+                }
+
                 ComposerTextInput(
                     value = draft,
                     onValueChange = onDraftChange,
@@ -121,7 +164,7 @@ fun ChatComposer(
                     currentProvider = currentProvider,
                     modelName = currentModelName,
                     isReplying = isReplying,
-                    canSend = draft.isNotBlank(),
+                    canSend = draft.isNotBlank() || pendingAttachments.isNotEmpty(),
                     onOpenAttachmentSheet = { activeSheet = ComposerSheet.Attachments },
                     onOpenModelPicker = onOpenModelPicker,
                     onOpenThinkingSheet = { activeSheet = ComposerSheet.Thinking },
@@ -135,10 +178,17 @@ fun ChatComposer(
 
     when (activeSheet) {
         ComposerSheet.Attachments -> AttachmentImportSheet(
+            imageInputSupported = imageInputSupported,
+            onPickImage = {
+                activeSheet = null
+                imagePicker.launch(
+                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            },
             onDismiss = { activeSheet = null },
         )
         ComposerSheet.Thinking -> ThinkingLevelSheet(
-            currentLevel = draftThinkingLevel,
+            currentLevel = currentThinkingLevel,
             onSelectLevel = onSelectThinkingLevel,
             onDismiss = { activeSheet = null },
         )
@@ -304,6 +354,8 @@ private fun ChatComposerToolbar(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun AttachmentImportSheet(
+    imageInputSupported: Boolean,
+    onPickImage: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -318,7 +370,11 @@ private fun AttachmentImportSheet(
         ) {
             NutTavernSheetTitle(
                 title = "附件导入",
-                description = "拍照、照片和文件上传暂未接入；这里不会申请权限或打开系统选择器。",
+                description = if (imageInputSupported) {
+                    "选择照片发送给支持图片输入的模型。拍照与文件上传暂未接入。"
+                } else {
+                    "当前模型不支持图片输入。拍照与文件上传暂未接入。"
+                },
             )
             // 横向 3 等分 Tile,与 IconRow 形态不同,保留自写。
             // 替换条件:出现两次以上、或附件入口需要新增视觉变体时,沉淀到设计系统。
@@ -327,9 +383,49 @@ private fun AttachmentImportSheet(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 DisabledAttachmentTile("拍照", Lucide.Camera, Modifier.weight(1f))
-                DisabledAttachmentTile("照片", Lucide.Image, Modifier.weight(1f))
+                AttachmentTile(
+                    title = "照片",
+                    icon = Lucide.Image,
+                    enabled = imageInputSupported,
+                    onClick = onPickImage,
+                    modifier = Modifier.weight(1f),
+                )
                 DisabledAttachmentTile("上传文件", Lucide.FileUp, Modifier.weight(1f))
             }
+        }
+    }
+}
+
+/** 可点击的附件 Tile;[enabled]=false 时灰显不可点(模型不支持图片输入)。 */
+@Composable
+private fun AttachmentTile(
+    title: String,
+    icon: ImageVector,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (!enabled) {
+        DisabledAttachmentTile(title, icon, modifier, subtitle = "不支持")
+        return
+    }
+    Surface(
+        onClick = onClick,
+        modifier = modifier.height(84.dp),
+        shape = RoundedCornerShape(NutTavernShapeTokens.AttachmentTile),
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Icon(icon, null, Modifier.size(22.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1)
         }
     }
 }
@@ -339,6 +435,7 @@ private fun DisabledAttachmentTile(
     title: String,
     icon: ImageVector,
     modifier: Modifier = Modifier,
+    subtitle: String = "暂未支持",
 ) {
     Surface(
         modifier = modifier.height(84.dp),
@@ -356,7 +453,51 @@ private fun DisabledAttachmentTile(
             Icon(icon, null, Modifier.size(22.dp))
             Spacer(modifier = Modifier.height(6.dp))
             Text(title, style = MaterialTheme.typography.labelMedium, maxLines = 1)
-            Text("暂未支持", style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
+    }
+}
+
+/** Composer 顶部待发图片预览条:横向缩略图 + 右上角删除按钮。 */
+@Composable
+private fun PendingAttachmentStrip(
+    attachments: List<ImageAttachment>,
+    onRemove: (String) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        attachments.forEach { attachment ->
+            Box(modifier = Modifier.size(64.dp)) {
+                AsyncImage(
+                    model = attachment.path,
+                    contentDescription = "待发送图片",
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .clip(RoundedCornerShape(NutTavernShapeTokens.AttachmentTile)),
+                )
+                Surface(
+                    onClick = { onRemove(attachment.id) },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                    contentColor = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(2.dp)
+                        .size(20.dp),
+                ) {
+                    Icon(
+                        Lucide.X,
+                        contentDescription = "移除图片",
+                        modifier = Modifier.padding(3.dp),
+                    )
+                }
+            }
         }
     }
 }
@@ -408,42 +549,97 @@ private fun ThinkingLevelSheet(
     onSelectLevel: (ThinkingLevel) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val isCustom = currentLevel is ThinkingLevel.Budget
+    val customTokens = (currentLevel as? ThinkingLevel.Budget)?.tokens ?: ThinkingDefaultCustomTokens
+    // skipPartiallyExpanded + 固定 0.6f 高度,对齐项目其它 Picker sheet(AGENTS 组件规范 8)。
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
+        sheetState = sheetState,
         dragHandle = { BottomSheetDefaults.DragHandle() },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.6f)
                 .padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionLabelBottomSpacing),
         ) {
             NutTavernSheetTitle(
                 title = "思考量",
-                description = "本轮为草稿级 UI 状态，不会改变 API 请求参数。",
+                description = "控制模型的思考强度，会话级生效。自动表示不指定，由模型自行决定。",
             )
-            NutTavernGroupSection {
-                ThinkingLevel.entries.forEachIndexed { index, level ->
-                    val selected = currentLevel == level
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+            ) {
+                NutTavernGroupSection {
+                    thinkingPresetOptions.forEach { option ->
+                        val selected = !isCustom && currentLevel == option.level
+                        NutTavernIconRow(
+                            icon = Lucide.Brain,
+                            title = option.label,
+                            subtitle = option.description,
+                            trailing = if (selected) {
+                                { NutTavernSelectedCheckIcon() }
+                            } else {
+                                null
+                            },
+                            onClick = { onSelectLevel(option.level) },
+                        )
+                        NutTavernGroupDivider()
+                    }
                     NutTavernIconRow(
                         icon = Lucide.Brain,
-                        title = level.label,
-                        subtitle = thinkingLevelDescription(level),
-                        trailing = if (selected) {
+                        title = "自定义",
+                        subtitle = "指定具体的思考 token 预算",
+                        trailing = if (isCustom) {
                             { NutTavernSelectedCheckIcon() }
                         } else {
                             null
                         },
-                        onClick = { onSelectLevel(level) },
+                        onClick = { onSelectLevel(ThinkingLevel.Budget(customTokens)) },
                     )
-                    if (index < ThinkingLevel.entries.lastIndex) {
-                        NutTavernGroupDivider()
-                    }
+                    NutTavernGroupDivider()
+                    // 输入框常驻,只在选中"自定义"时可编辑:高度恒定,sheet 不会因增删而跳动。
+                    NutTavernNumericField(
+                        label = "思考 token 预算",
+                        value = customTokens,
+                        onValueChange = { tokens ->
+                            tokens?.let { onSelectLevel(ThinkingLevel.Budget(it)) }
+                        },
+                        parser = NumericParser.IntParser,
+                        min = ThinkingLevel.MIN_BUDGET_TOKENS,
+                        max = ThinkingLevel.MAX_BUDGET_TOKENS,
+                        enabled = isCustom,
+                        helperText = "范围 ${ThinkingLevel.MIN_BUDGET_TOKENS} ~ ${ThinkingLevel.MAX_BUDGET_TOKENS}",
+                    )
                 }
             }
         }
     }
 }
+
+/** 思考量固定档位选项(关闭 / 自动 / 五档努力度),"自定义"单独处理。 */
+private data class ThinkingPresetOption(
+    val label: String,
+    val description: String,
+    val level: ThinkingLevel,
+)
+
+private val thinkingPresetOptions = listOf(
+    ThinkingPresetOption("关闭", "不进行思考", ThinkingLevel.Off),
+    ThinkingPresetOption("自动", "由模型自行决定思考强度", ThinkingLevel.Auto),
+    ThinkingPresetOption("极低", "极低思考强度", ThinkingLevel.Effort(EffortTier.MINIMAL)),
+    ThinkingPresetOption("低", "低思考强度", ThinkingLevel.Effort(EffortTier.LOW)),
+    ThinkingPresetOption("中", "中等思考强度", ThinkingLevel.Effort(EffortTier.MEDIUM)),
+    ThinkingPresetOption("高", "高思考强度", ThinkingLevel.Effort(EffortTier.HIGH)),
+    ThinkingPresetOption("极高", "最高思考强度", ThinkingLevel.Effort(EffortTier.MAX)),
+)
+
+private const val ThinkingDefaultCustomTokens = 4_096
 
 private enum class ComposerSheet {
     Attachments,
@@ -453,11 +649,3 @@ private enum class ComposerSheet {
 
 private val ComposerSingleLineTextHeight = 30.dp
 private val ComposerTextInputVerticalPadding = 5.dp
-
-private fun thinkingLevelDescription(level: ThinkingLevel): String {
-    return when (level) {
-        ThinkingLevel.LOW -> "更轻量的界面选择，当前不改变请求"
-        ThinkingLevel.MEDIUM -> "默认状态，当前不改变请求"
-        ThinkingLevel.HIGH -> "高思考量占位，当前不改变请求"
-    }
-}

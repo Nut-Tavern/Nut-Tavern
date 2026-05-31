@@ -1,20 +1,28 @@
 package com.nuttavern.data.repository
 
+import android.content.Context
 import com.nuttavern.data.local.dao.ConversationDao
 import com.nuttavern.data.local.dao.MessageDao
 import com.nuttavern.data.local.entity.ConversationEntity
 import com.nuttavern.data.local.entity.MessageEntity
 import com.nuttavern.data.model.ConversationSummary
+import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
+import com.nuttavern.data.model.ThinkingLevel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @Singleton
 class ConversationRepository @Inject constructor(
     private val conversationDao: ConversationDao,
     private val messageDao: MessageDao,
+    @param:ApplicationContext private val context: Context,
 ) {
     val nonArchivedConversations: Flow<List<ConversationSummary>> =
         conversationDao.getAllNonArchived().map { conversations ->
@@ -51,6 +59,39 @@ class ConversationRepository @Inject constructor(
 
     suspend fun deleteMessage(messageId: String) {
         messageDao.deleteById(messageId)
+    }
+
+    /**
+     * 把图片字节写入 `filesDir/chat-images/{attachmentId}.{ext}`,返回可存进
+     * [ImageAttachment.path] 的绝对路径。设计对齐角色头像落盘
+     * ([com.nuttavern.data.character.CharacterRepository.saveAvatarBytes])。
+     *
+     * @throws IllegalArgumentException attachmentId 含路径分隔符 / 扩展名不支持时抛出
+     */
+    fun saveImageBytes(attachmentId: String, bytes: ByteArray, extension: String): String {
+        val target = imageFileFor(attachmentId, extension)
+        target.parentFile?.mkdirs()
+        target.writeBytes(bytes)
+        return target.absolutePath
+    }
+
+    /** 读出图片附件字节;文件不存在返回 null。 */
+    fun readImageBytes(path: String?): ByteArray? {
+        val file = path?.takeIf { it.isNotBlank() }?.let { File(it) } ?: return null
+        return if (file.exists()) file.readBytes() else null
+    }
+
+    private fun imageFileFor(attachmentId: String, extension: String): File {
+        require(attachmentId.isNotBlank()) { "Attachment id must not be blank." }
+        // 文件名直接用 attachmentId 拼,必须拒绝路径分隔符 / 上跳,防止写到私有目录外。
+        require(attachmentId.none { it == '/' || it == '\\' } && !attachmentId.contains("..")) {
+            "Attachment id must not contain path separators."
+        }
+        val safeExtension = extension.trim().trimStart('.').lowercase()
+        require(safeExtension in SUPPORTED_IMAGE_EXTENSIONS) {
+            "Unsupported image extension: $extension"
+        }
+        return File(File(context.filesDir, CHAT_IMAGE_DIRECTORY), "$attachmentId.$safeExtension")
     }
 
     suspend fun deleteMessagesAfter(conversationId: String, messageId: String) {
@@ -166,6 +207,7 @@ class ConversationRepository @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
+            thinkingLevel = ThinkingLevel.parse(thinkingLevel),
         )
     }
 
@@ -184,6 +226,7 @@ class ConversationRepository @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
+            thinkingLevel = ThinkingLevel.serialize(thinkingLevel),
         )
     }
 
@@ -194,6 +237,7 @@ class ConversationRepository @Inject constructor(
             content = content,
             reasoningContent = reasoningContent,
             reasoningDurationMillis = reasoningDurationMillis,
+            attachments = decodeAttachments(attachmentsJson),
         )
     }
 
@@ -206,7 +250,21 @@ class ConversationRepository @Inject constructor(
             reasoningContent = reasoningContent,
             reasoningDurationMillis = reasoningDurationMillis,
             createdAt = createdAt,
+            attachmentsJson = encodeAttachments(attachments),
         )
+    }
+
+    private fun decodeAttachments(json: String): List<ImageAttachment> {
+        if (json.isBlank() || json == "[]") return emptyList()
+        // 损坏 JSON 不应让整个会话加载崩;退化为无附件,只丢这一条消息的图片引用。
+        return runCatching {
+            attachmentsJsonCodec.decodeFromString<List<ImageAttachment>>(json)
+        }.getOrDefault(emptyList())
+    }
+
+    private fun encodeAttachments(attachments: List<ImageAttachment>): String {
+        if (attachments.isEmpty()) return "[]"
+        return attachmentsJsonCodec.encodeToString(attachments)
     }
 
     private fun formatRelativeTime(timestamp: Long): String {
@@ -246,5 +304,10 @@ class ConversationRepository @Inject constructor(
         const val ONE_HOUR_MILLIS = 60 * ONE_MINUTE_MILLIS
         const val ONE_DAY_MILLIS = 24 * ONE_HOUR_MILLIS
         const val TWO_DAYS_MILLIS = 2 * ONE_DAY_MILLIS
+
+        const val CHAT_IMAGE_DIRECTORY = "chat-images"
+        val SUPPORTED_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
+
+        val attachmentsJsonCodec = Json { ignoreUnknownKeys = true }
     }
 }

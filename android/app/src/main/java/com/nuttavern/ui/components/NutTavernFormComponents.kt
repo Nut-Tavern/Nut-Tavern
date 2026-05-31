@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -17,11 +18,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -324,6 +328,7 @@ fun <T : Number> NutTavernNumericField(
     min: T? = null,
     max: T? = null,
     nullable: Boolean = false,
+    enabled: Boolean = true,
     helperText: String? = null,
     placeholder: String? = null,
 ) {
@@ -339,7 +344,9 @@ fun <T : Number> NutTavernNumericField(
     }
 
     // 合法且数值真实改变 → 回写 value。中间态 / 非法 / 超范围 → 不写回,rawText 保留。
-    LaunchedEffect(validation) {
+    // 禁用态不回写:此时字段只读展示,避免本地 rawText 与外部 value 互相打架。
+    LaunchedEffect(validation, enabled) {
+        if (!enabled) return@LaunchedEffect
         when (validation) {
             is NumericValidation.Valid -> {
                 @Suppress("UNCHECKED_CAST")
@@ -349,7 +356,7 @@ fun <T : Number> NutTavernNumericField(
         }
     }
 
-    val errorMessage = (validation as? NumericValidation.Invalid)?.message
+    val errorMessage = (validation as? NumericValidation.Invalid)?.message.takeIf { enabled }
     val isError = errorMessage != null
     val supportingMessage = errorMessage ?: helperText
 
@@ -365,6 +372,7 @@ fun <T : Number> NutTavernNumericField(
             label = { Text(label) },
             placeholder = placeholder?.let { { Text(it) } },
             singleLine = true,
+            enabled = enabled,
             isError = isError,
             keyboardOptions = KeyboardOptions(keyboardType = parser.keyboardType),
             modifier = Modifier.fillMaxWidth(),
@@ -445,4 +453,129 @@ private fun <T : Number> validateNumeric(
         return NumericValidation.Invalid("不大于 ${parser.format(max)}")
     }
     return NumericValidation.Valid(parsed)
+}
+
+// ── 开关行 ──
+
+/**
+ * 表单内开关行。整行可点击切换,用于编辑页布尔字段。
+ *
+ * 统一替代各页面 private SwitchRow 副本。
+ */
+@Composable
+fun NutTavernSwitchRow(
+    label: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        onClick = { onCheckedChange(!checked) },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        }
+    }
+}
+
+// ── 枚举选择行 ──
+
+/**
+ * 枚举选择行。点击弹出 ModalBottomSheet 单选。
+ *
+ * 泛型版本:options 为 `List<Pair<T, String>>`,T 是枚举值,String 是显示文本。
+ * 统一替代各页面 private EnumRow 副本。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun <T> NutTavernEnumRow(
+    label: String,
+    value: T,
+    options: List<Pair<T, String>>,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    optionDescriptions: Map<T, String> = emptyMap(),
+) {
+    var showSheet by remember { mutableStateOf(false) }
+    val displayValue = options.firstOrNull { it.first == value }?.second ?: value.toString()
+
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        onClick = { showSheet = true },
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(
+                text = label,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = displayValue,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Icon(
+                imageVector = Lucide.ChevronRight,
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+
+    if (showSheet) {
+        ModalBottomSheet(onDismissRequest = { showSheet = false }) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                NutTavernSheetTitle(title = label)
+                options.forEach { (optionValue, optionLabel) ->
+                    NutTavernSelectableRow(
+                        title = optionLabel,
+                        subtitle = optionDescriptions[optionValue],
+                        selected = optionValue == value,
+                        onClick = { onSelect(optionValue); showSheet = false },
+                    )
+                }
+                Spacer(Modifier.padding(bottom = 16.dp))
+            }
+        }
+    }
 }

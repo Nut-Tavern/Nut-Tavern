@@ -262,6 +262,114 @@ class RegexScriptRepository @Inject constructor(
         }
     }
 
+    // ─── 组间移动 ─────────────────────────────────────────────────────────────
+
+    /** 移入正则组:散规则 → 指定组末尾。 */
+    suspend fun moveOrphanToGroup(scriptId: String, targetGroupId: String) {
+        dataStore.mutate { s ->
+            val script = s.orphanScripts.find { it.id == scriptId } ?: return@mutate s
+            s.copy(
+                orphanScripts = s.orphanScripts.filterNot { it.id == scriptId },
+                topLevelOrder = s.topLevelOrder.filterNot { it == scriptId },
+                groups = s.groups.map { g ->
+                    if (g.id == targetGroupId) g.copy(scripts = g.scripts + script)
+                    else g
+                },
+            )
+        }
+    }
+
+    /** 移出正则组:组内脚本 → 散规则(插到该组在顶层列表的后面)。 */
+    suspend fun moveScriptOutOfGroup(groupId: String, scriptId: String) {
+        dataStore.mutate { s ->
+            val group = s.groups.find { it.id == groupId } ?: return@mutate s
+            val script = group.scripts.find { it.id == scriptId } ?: return@mutate s
+            val insertIndex = s.topLevelOrder.indexOf(groupId)
+            val newOrder = s.topLevelOrder.toMutableList().apply {
+                add(if (insertIndex >= 0) insertIndex + 1 else size, scriptId)
+            }
+            s.copy(
+                groups = s.groups.map { g ->
+                    if (g.id == groupId) g.copy(scripts = g.scripts.filterNot { it.id == scriptId })
+                    else g
+                },
+                orphanScripts = s.orphanScripts + script,
+                topLevelOrder = newOrder,
+            )
+        }
+    }
+
+    /** 迁移到其他正则组:组内脚本 → 另一个组末尾。 */
+    suspend fun moveScriptToOtherGroup(sourceGroupId: String, scriptId: String, targetGroupId: String) {
+        dataStore.mutate { s ->
+            val sourceGroup = s.groups.find { it.id == sourceGroupId } ?: return@mutate s
+            val script = sourceGroup.scripts.find { it.id == scriptId } ?: return@mutate s
+            s.copy(
+                groups = s.groups.map { g ->
+                    when (g.id) {
+                        sourceGroupId -> g.copy(scripts = g.scripts.filterNot { it.id == scriptId })
+                        targetGroupId -> g.copy(scripts = g.scripts + script)
+                        else -> g
+                    }
+                },
+            )
+        }
+    }
+
+    /** 拆散正则组:组内所有脚本变为散规则,组删除。 */
+    suspend fun dissolveGroup(groupId: String) {
+        dataStore.mutate { s ->
+            val group = s.groups.find { it.id == groupId } ?: return@mutate s
+            val insertIndex = s.topLevelOrder.indexOf(groupId)
+            val scriptIds = group.scripts.map { it.id }
+            val newOrder = s.topLevelOrder.toMutableList().apply {
+                val idx = indexOf(groupId)
+                if (idx >= 0) {
+                    remove(groupId)
+                    addAll(idx, scriptIds)
+                } else {
+                    addAll(scriptIds)
+                }
+            }
+            s.copy(
+                groups = s.groups.filterNot { it.id == groupId },
+                orphanScripts = s.orphanScripts + group.scripts,
+                topLevelOrder = newOrder,
+            )
+        }
+        conversationRepository.removeRegexGroupIdFromAllConversations(groupId)
+    }
+
+    // ─── 导入导出 ─────────────────────────────────────────────────────────────
+
+    /**
+     * 导入正则脚本。
+     *
+     * - 单条:作为散规则追加。
+     * - 多条:自动创建一个新组装入。
+     *
+     * 所有脚本重新分配 UUID(对齐酒馆导入行为)。
+     *
+     * @param scripts 待导入的脚本列表(已反序列化)
+     * @param groupName 多条时创建的组名;单条时忽略
+     */
+    suspend fun importScripts(scripts: List<RegexScript>, groupName: String) {
+        if (scripts.isEmpty()) return
+        val reassigned = scripts.map { it.copy(id = java.util.UUID.randomUUID().toString()) }
+
+        if (reassigned.size == 1) {
+            upsertOrphan(reassigned.first())
+        } else {
+            val group = RegexGroup(
+                id = java.util.UUID.randomUUID().toString(),
+                name = groupName,
+                enabled = true,
+                scripts = reassigned,
+            )
+            upsertGroup(group)
+        }
+    }
+
     // ─── 内部工具 ─────────────────────────────────────────────────────────────
 
     private fun expandEnabled(s: RegexScriptDataStore.Snapshot): List<RegexScript> {
