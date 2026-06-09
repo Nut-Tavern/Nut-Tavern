@@ -50,7 +50,7 @@ fun ToolModePickerSheet(
         ) {
             NutTavernSheetTitle(
                 title = "本会话内置工具",
-                description = "控制当前会话是否允许模型调用内置工具,只影响这一个会话。",
+                description = "控制当前会话是否允许模型调用内置工具，只影响这一个会话。",
             )
             NutTavernSelectableRow(
                 title = "跟随全局默认",
@@ -60,13 +60,13 @@ fun ToolModePickerSheet(
             )
             NutTavernSelectableRow(
                 title = "本会话强制启用",
-                subtitle = "无视全局默认,这个会话始终允许调用工具",
+                subtitle = "无视全局默认，这个会话始终允许调用工具",
                 selected = currentMode == ConversationToolMode.FORCE_ON,
                 onClick = { onSelect(ConversationToolMode.FORCE_ON) },
             )
             NutTavernSelectableRow(
                 title = "本会话强制关闭",
-                subtitle = "无视全局默认,这个会话始终不调用工具",
+                subtitle = "无视全局默认，这个会话始终不调用工具",
                 selected = currentMode == ConversationToolMode.FORCE_OFF,
                 onClick = { onSelect(ConversationToolMode.FORCE_OFF) },
             )

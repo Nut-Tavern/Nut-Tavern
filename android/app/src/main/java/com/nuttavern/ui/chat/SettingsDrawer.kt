@@ -128,7 +128,7 @@ internal fun SettingsDrawer(
                 NutTavernGroupSection {
                     NutTavernIconRow(
                         icon = Lucide.Wrench,
-                        title = "内置工具",
+                        title = "本会话内置工具",
                         subtitle = toolModeSubtitle,
                         showTrailingChevron = true,
                         onClick = onOpenToolModePicker,

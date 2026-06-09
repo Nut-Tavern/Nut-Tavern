@@ -1,5 +1,7 @@
 package com.nuttavern.ui.chat
 
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
@@ -172,10 +174,16 @@ internal fun ToolApprovalDialog(
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (argumentsJson.isNotBlank()) {
+                    val displayArgs = if (argumentsJson.length > 200) {
+                        argumentsJson.take(200) + "..."
+                    } else {
+                        argumentsJson
+                    }
                     Text(
-                        text = "参数:$argumentsJson",
+                        text = "参数: $displayArgs",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp)
                     )
                 }
             }

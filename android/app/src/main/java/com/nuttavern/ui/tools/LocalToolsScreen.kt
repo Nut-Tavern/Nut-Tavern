@@ -3,6 +3,7 @@ package com.nuttavern.ui.tools
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -107,20 +108,40 @@ fun LocalToolsScreen(
                 NutTavernSectionLabel(text = "可用工具")
             }
 
-            items(
-                viewModel.tools,
-                key = { it.id },
-            ) { tool ->
-                NutTavernEntityCard(
-                    title = tool.displayName,
-                    subtitle = "${tool.name}:${tool.description}",
-                    trailing = {
-                        NutTavernEntitySwitch(
-                            checked = tool.id in settings.enabledToolIds,
-                            onCheckedChange = { viewModel.setToolEnabled(tool.id, it) },
+            if (viewModel.tools.isEmpty()) {
+                item(key = "tools-empty") {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 32.dp),
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        Text(
+                            text = "暂无可用工具",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
-                    },
-                )
+                    }
+                }
+            } else {
+                items(
+                    viewModel.tools,
+                    key = { it.id },
+                ) { tool ->
+                    val subtitle = if (tool.name == "get_current_time") {
+                        "获取设备当前本地时间"
+                    } else {
+                        "${tool.name}: ${tool.description}"
+                    }
+                    NutTavernEntityCard(
+                        title = tool.displayName,
+                        subtitle = subtitle,
+                        trailing = {
+                            NutTavernEntitySwitch(
+                                checked = tool.id in settings.enabledToolIds,
+                                onCheckedChange = { viewModel.setToolEnabled(tool.id, it) },
+                            )
+                        },
+                    )
+                }
             }
         }
     }

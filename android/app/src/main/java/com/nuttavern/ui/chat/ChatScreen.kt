@@ -3,6 +3,11 @@ package com.nuttavern.ui.chat
 import androidx.activity.compose.BackHandler
 import android.content.ClipData
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DrawerState
 import androidx.compose.material3.DrawerValue
@@ -81,6 +86,7 @@ fun ChatScreen(
     val lorebookCounts by viewModel.lorebookCounts.collectAsState()
     val currentToolMode by viewModel.currentToolMode.collectAsState()
     val localToolsSettings by viewModel.localToolsSettings.collectAsState()
+    val currentToolActivity by viewModel.currentToolActivity.collectAsState()
     val pendingToolApproval by viewModel.pendingToolApproval.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -233,6 +239,7 @@ fun ChatScreen(
                         currentProvider = currentProvider,
                         currentModel = currentModel,
                         currentThinkingLevel = currentThinkingLevel,
+                        currentToolActivity = currentToolActivity,
                         pendingAttachments = pendingAttachments,
                         imageInputSupported = imageInputSupported,
                         onAddImage = viewModel::addImageAttachment,
@@ -450,6 +457,7 @@ private fun ChatScreenContent(
     currentProvider: com.nuttavern.data.model.Provider?,
     currentModel: com.nuttavern.data.model.Model?,
     currentThinkingLevel: com.nuttavern.data.model.ThinkingLevel,
+    currentToolActivity: String?,
     pendingAttachments: List<com.nuttavern.data.model.ImageAttachment>,
     imageInputSupported: Boolean,
     onAddImage: (ByteArray, String) -> Unit,
@@ -505,23 +513,50 @@ private fun ChatScreenContent(
             //
             // 不使用自定义 contentWindowInsets:Scaffold 默认的 systemBars 会被 bottomBar 抵消;
             // safeDrawing 会重复消费 IME,与 bottomBar 路径冲突,导致键盘高度被叠两次。
-            ChatComposer(
-                draft = draft,
-                isReplying = isReplying,
-                currentProvider = currentProvider,
-                currentModelName = currentModel?.modelId.orEmpty(),
-                currentThinkingLevel = currentThinkingLevel,
-                pendingAttachments = pendingAttachments,
-                imageInputSupported = imageInputSupported,
-                onAddImage = onAddImage,
-                onRemoveImage = onRemoveImage,
-                onOpenModelPicker = onOpenModelPicker,
-                onDraftChange = onDraftChange,
-                onSendDraft = onSendDraft,
-                onStopGeneration = onStopGeneration,
-                onSelectThinkingLevel = onSelectThinkingLevel,
-                bottomPadding = composerBottomPadding,
-            )
+            Column {
+                if (currentToolActivity != null) {
+                    androidx.compose.material3.Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                    ) {
+                        androidx.compose.foundation.layout.Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            androidx.compose.material3.CircularProgressIndicator(
+                                modifier = Modifier.size(14.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                text = "正在调用工具: $currentToolActivity...",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                ChatComposer(
+                    draft = draft,
+                    isReplying = isReplying,
+                    currentProvider = currentProvider,
+                    currentModelName = currentModel?.modelId.orEmpty(),
+                    currentThinkingLevel = currentThinkingLevel,
+                    pendingAttachments = pendingAttachments,
+                    imageInputSupported = imageInputSupported,
+                    onAddImage = onAddImage,
+                    onRemoveImage = onRemoveImage,
+                    onOpenModelPicker = onOpenModelPicker,
+                    onDraftChange = onDraftChange,
+                    onSendDraft = onSendDraft,
+                    onStopGeneration = onStopGeneration,
+                    onSelectThinkingLevel = onSelectThinkingLevel,
+                    bottomPadding = composerBottomPadding,
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { innerPadding ->
