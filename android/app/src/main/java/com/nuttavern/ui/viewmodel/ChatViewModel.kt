@@ -7,6 +7,7 @@ import com.nuttavern.data.character.CharacterRepository
 import com.nuttavern.data.model.AssistantConfig
 import com.nuttavern.data.model.ChatRunMode
 import com.nuttavern.data.model.ConversationSummary
+import com.nuttavern.data.tools.resolveToolsEnabled
 import com.nuttavern.data.model.GeneratedContentSanitizer
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
@@ -92,6 +93,7 @@ class ChatViewModel @Inject constructor(
     private val chatApiClient: ChatApiClient,
     private val chatToolRegistry: com.nuttavern.network.ChatToolRegistry,
     private val toolsSettingsRepository: com.nuttavern.data.tools.ToolsSettingsRepository,
+    private val localToolsRepository: com.nuttavern.data.tools.LocalToolsRepository,
 ) : ViewModel() {
 
     private val _conversationList = MutableStateFlow<List<ConversationSummary>>(emptyList())
@@ -135,6 +137,33 @@ class ChatViewModel @Inject constructor(
      */
     private val _currentThinkingLevel = MutableStateFlow<ThinkingLevel>(ThinkingLevel.Default)
     val currentThinkingLevel: StateFlow<ThinkingLevel> = _currentThinkingLevel.asStateFlow()
+
+    /**
+     * 当前会话的内置工具开关模式(跟随全局 / 强制开 / 强制关)。会话级,与 [currentThinkingLevel] 同模式。
+     */
+    private val _currentToolMode =
+        MutableStateFlow(com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL)
+    val currentToolMode: StateFlow<com.nuttavern.data.tools.ConversationToolMode> =
+        _currentToolMode.asStateFlow()
+
+    /** 内置工具全局配置(全局默认开关 / 人工确认 / 各工具启用集),供右侧栏与设置页展示。 */
+    val localToolsSettings: StateFlow<com.nuttavern.data.tools.LocalToolsSettings> =
+        localToolsRepository.settings.stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(5000),
+            com.nuttavern.data.tools.LocalToolsSettings(),
+        )
+
+    /**
+     * 待人工确认的工具调用。非空时 UI 弹确认框;用户点按后通过 [resolveToolApproval] 回填结果。
+     */
+    private val _pendingToolApproval = MutableStateFlow<PendingToolApproval?>(null)
+    val pendingToolApproval: StateFlow<PendingToolApproval?> = _pendingToolApproval.asStateFlow()
+    private var toolApprovalDeferred: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+
+    /** 当前流式回复正在调用的内置工具名。空表示没有工具活动,供 UI 展示短暂状态提示。 */
+    private val _currentToolActivity = MutableStateFlow<String?>(null)
+    val currentToolActivity: StateFlow<String?> = _currentToolActivity.asStateFlow()
 
     private val _streamingConversationId = MutableStateFlow<String?>(null)
     val streamingConversationId: StateFlow<String?> = _streamingConversationId.asStateFlow()
@@ -348,6 +377,7 @@ class ChatViewModel @Inject constructor(
                     _currentPersonaId.value = nextConversation.personaId
                     _currentPresetId.value = nextConversation.presetId
                     _currentThinkingLevel.value = nextConversation.thinkingLevel
+                    _currentToolMode.value = nextConversation.toolMode
                 } else {
                     _currentMessages.value = emptyList()
                 }
@@ -411,13 +441,21 @@ class ChatViewModel @Inject constructor(
                 _currentPersonaId,
                 _currentPresetId,
                 _currentThinkingLevel,
-            ) { conversationId, characterId, personaId, presetId, thinkingLevel ->
+                _currentToolMode,
+            ) { values ->
+                val conversationId = values[0] as String
+                val characterId = values[1] as String?
+                val personaId = values[2] as String?
+                val presetId = values[3] as String?
+                val thinkingLevel = values[4] as ThinkingLevel
+                val toolMode = values[5] as com.nuttavern.data.tools.ConversationToolMode
                 SettingsDataStore.LastChatState(
                     conversationId = conversationId.takeIf { it.isNotBlank() },
                     characterId = characterId,
                     personaId = personaId,
                     presetId = presetId,
                     thinkingLevel = ThinkingLevel.serialize(thinkingLevel),
+                    toolMode = toolMode.storageValue,
                 )
             }.collect { state ->
                 if (hasRestoredFromPersistence) {
@@ -450,6 +488,7 @@ class ChatViewModel @Inject constructor(
             _currentPersonaId.value = savedConversation.personaId
             _currentPresetId.value = savedConversation.presetId
             _currentThinkingLevel.value = savedConversation.thinkingLevel
+            _currentToolMode.value = savedConversation.toolMode
             return
         }
 
@@ -463,6 +502,7 @@ class ChatViewModel @Inject constructor(
             _currentPersonaId.value = saved.personaId
             _currentPresetId.value = saved.presetId
             _currentThinkingLevel.value = ThinkingLevel.parse(saved.thinkingLevel)
+            _currentToolMode.value = com.nuttavern.data.tools.ConversationToolMode.fromStorage(saved.toolMode)
             _currentMessages.value = emptyList()
             return
         }
@@ -475,6 +515,7 @@ class ChatViewModel @Inject constructor(
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
             _currentThinkingLevel.value = nextConversation.thinkingLevel
+            _currentToolMode.value = nextConversation.toolMode
         } else {
             _currentMessages.value = emptyList()
         }
@@ -594,6 +635,8 @@ class ChatViewModel @Inject constructor(
                 streamingReasoningStartedAtMillis = null
                 streamingReasoningEndedAtMillis = null
                 val toolsSettings = toolsSettingsRepository.settings.first()
+                val localToolsConfig = localToolsRepository.settings.first()
+                val activeTools = resolveActiveTools(localToolsConfig)
 
                 chatApiClient.streamChat(
                     provider = provider,
@@ -602,8 +645,10 @@ class ChatViewModel @Inject constructor(
                     systemPrompt = prepared.systemPrompt,
                     thinkingLevel = _currentThinkingLevel.value,
                     generationParams = prepared.generationParams,
-                    tools = chatToolRegistry.tools,
+                    tools = activeTools,
                     toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
+                    requireToolApproval = localToolsConfig.requireApproval,
+                    approveToolCall = buildToolApprover(),
                 ).collect { chunk ->
                     when {
                         chunk.error != null -> {
@@ -627,6 +672,7 @@ class ChatViewModel @Inject constructor(
                         }
                         else -> {
                             if (_streamingConversationId.value == conversationId) {
+                                _currentToolActivity.value = chunk.toolActivity
                                 appendStreamingChunk(chunk.content, chunk.reasoningContent)
                             }
                         }
@@ -646,6 +692,7 @@ class ChatViewModel @Inject constructor(
     fun stopGeneration() {
         streamingJob?.cancel()
         streamingJob = null
+        clearPendingToolApproval()
         _streamingConversationId.value?.let { conversationId ->
             val partialContent = _streamingContent.value.trimEnd()
             val partialReasoningContent = _streamingReasoningContent.value.trimEnd()
@@ -674,6 +721,7 @@ class ChatViewModel @Inject constructor(
         _currentPersonaId.value = conversation.personaId
         _currentPresetId.value = conversation.presetId
         _currentThinkingLevel.value = conversation.thinkingLevel
+        _currentToolMode.value = conversation.toolMode
         _draft.value = ""
     }
 
@@ -691,6 +739,7 @@ class ChatViewModel @Inject constructor(
         _currentMessages.value = emptyList()
         _draft.value = ""
         _currentThinkingLevel.value = ThinkingLevel.Default
+        _currentToolMode.value = com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL
         viewModelScope.launch {
             _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
             _currentPresetId.value = resolveDefaultPresetId()
@@ -882,6 +931,81 @@ class ChatViewModel @Inject constructor(
         _errorMessage.value = null
     }
 
+    /**
+     * 切换当前会话内置工具开关模式。与 [selectThinkingLevel] 同模式:会话级,落库,切模式不影响其他会话。
+     */
+    fun selectToolMode(mode: com.nuttavern.data.tools.ConversationToolMode) {
+        _currentToolMode.value = mode
+
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
+
+        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        if (conversation.toolMode == mode) return
+
+        viewModelScope.launch {
+            val updated = conversation.copy(toolMode = mode)
+            conversationRepository.updateConversation(updated)
+            _conversationList.update { list ->
+                list.map { if (it.id == conversationId) updated else it }
+            }
+        }
+    }
+
+    /** 用户对待确认工具调用点了"允许 / 拒绝"。回填给挂起的 tool loop 并清空待确认状态。 */
+    fun resolveToolApproval(approved: Boolean) {
+        toolApprovalDeferred?.complete(approved)
+        toolApprovalDeferred = null
+        _pendingToolApproval.value = null
+    }
+
+    /**
+     * 取消 / 停止生成时清理悬挂的工具确认。把未决 deferred 以"拒绝"完成,避免 tool loop 协程
+     * 永久挂起;同时关掉弹窗状态,避免残留一个已无对应生成任务的确认框。
+     */
+    private fun clearPendingToolApproval() {
+        toolApprovalDeferred?.complete(false)
+        toolApprovalDeferred = null
+        _pendingToolApproval.value = null
+    }
+
+    /**
+     * 本次发送实际要带的内置工具。三重门控:
+     * 1. 会话 toolMode 结合全局默认开关 → 决定本会话是否启用工具;
+     * 2. 全局 enabledToolIds → 只下发被勾选的工具;
+     * 3. 注册表里存在的工具定义。
+     */
+    private fun resolveActiveTools(
+        settings: com.nuttavern.data.tools.LocalToolsSettings,
+    ): List<com.nuttavern.network.ChatTool> {
+        val enabledForConversation =
+            _currentToolMode.value.resolveToolsEnabled(settings.defaultEnabled)
+        if (!enabledForConversation) return emptyList()
+        return chatToolRegistry.tools.filter { it.id in settings.enabledToolIds }
+    }
+
+    /**
+     * 构造人工确认回调。是否真正拦截由网络层按"全局 requireApproval 或工具自身 needsApproval"决定;
+     * 这里只负责把待确认信息抛给 UI、挂起等待用户点按。始终返回非空,保证高风险工具即使全局确认
+     * 关闭也能被拦截。
+     */
+    private fun buildToolApprover(): com.nuttavern.network.ToolCallApprover {
+        return { displayName, toolName, argumentsJson ->
+            val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
+            toolApprovalDeferred = deferred
+            _pendingToolApproval.value = PendingToolApproval(displayName, toolName, argumentsJson)
+            try {
+                deferred.await()
+            } finally {
+                // 无论是用户点按、协程取消还是异常退出,都清掉本次确认状态,避免弹窗 / deferred 悬挂。
+                if (toolApprovalDeferred === deferred) {
+                    toolApprovalDeferred = null
+                    _pendingToolApproval.value = null
+                }
+            }
+        }
+    }
+
     private val _clipboardMessage = MutableStateFlow<String?>(null)
     val clipboardMessage: StateFlow<String?> = _clipboardMessage.asStateFlow()
 
@@ -1051,6 +1175,7 @@ class ChatViewModel @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             thinkingLevel = thinkingLevel,
+            toolMode = _currentToolMode.value,
         )
 
         conversationRepository.createConversation(conversation, createdAt)
@@ -1120,6 +1245,7 @@ class ChatViewModel @Inject constructor(
         _currentPersonaId.value = nextConversation.personaId
         _currentPresetId.value = nextConversation.presetId
         _currentThinkingLevel.value = nextConversation.thinkingLevel
+        _currentToolMode.value = nextConversation.toolMode
         _draft.value = ""
         _isReplying.value = false
     }
@@ -1153,6 +1279,7 @@ class ChatViewModel @Inject constructor(
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
             _currentThinkingLevel.value = nextConversation.thinkingLevel
+            _currentToolMode.value = nextConversation.toolMode
         }
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -1367,6 +1494,7 @@ class ChatViewModel @Inject constructor(
 
         streamingJob?.cancel()
         streamingJob = null
+        clearPendingToolApproval()
         clearStreamingState(conversationId)
         _isReplying.value = false
     }
@@ -1439,6 +1567,8 @@ class ChatViewModel @Inject constructor(
         streamingReasoningStartedAtMillis = null
         streamingReasoningEndedAtMillis = null
         val toolsSettings = toolsSettingsRepository.settings.first()
+        val localToolsConfig = localToolsRepository.settings.first()
+        val activeTools = resolveActiveTools(localToolsConfig)
 
         chatApiClient.streamChat(
             provider = provider,
@@ -1447,8 +1577,10 @@ class ChatViewModel @Inject constructor(
             systemPrompt = prepared.systemPrompt,
             thinkingLevel = _currentThinkingLevel.value,
             generationParams = prepared.generationParams,
-            tools = chatToolRegistry.tools,
+            tools = activeTools,
             toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
+            requireToolApproval = localToolsConfig.requireApproval,
+            approveToolCall = buildToolApprover(),
         ).collect { chunk ->
             when {
                 chunk.error != null -> {
@@ -1472,6 +1604,7 @@ class ChatViewModel @Inject constructor(
                 }
                 else -> {
                     if (_streamingConversationId.value == conversationId) {
+                        _currentToolActivity.value = chunk.toolActivity
                         appendStreamingChunk(chunk.content, chunk.reasoningContent)
                     }
                 }
@@ -1860,6 +1993,7 @@ class ChatViewModel @Inject constructor(
             _streamingExplicitReasoningContent.value = ""
             _streamingReasoningContent.value = ""
             _streamingReasoningDurationMillis.value = 0L
+            _currentToolActivity.value = null
             streamingReasoningStartedAtMillis = null
             streamingReasoningEndedAtMillis = null
             streamingReasoningTimerJob?.cancel()
@@ -1918,3 +2052,16 @@ class ChatViewModel @Inject constructor(
         }
     }
 }
+
+/**
+ * 待人工确认的工具调用快照,供确认弹窗展示。
+ *
+ * @param displayName 工具中文名
+ * @param toolName 工具函数名
+ * @param argumentsJson 模型给出的实参 JSON 字符串
+ */
+data class PendingToolApproval(
+    val displayName: String,
+    val toolName: String,
+    val argumentsJson: String,
+)

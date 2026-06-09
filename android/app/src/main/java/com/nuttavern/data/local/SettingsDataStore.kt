@@ -6,10 +6,11 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.nuttavern.data.model.AssistantConfig
-import com.nuttavern.data.model.SystemPromptConfig
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import com.nuttavern.data.model.AssistantConfig
+import com.nuttavern.data.model.SystemPromptConfig
+import com.nuttavern.data.tools.ConversationToolMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -37,6 +38,7 @@ class SettingsDataStore @Inject constructor(
         val KEY_LAST_PERSONA_ID = stringPreferencesKey("last_persona_id")
         val KEY_LAST_PRESET_ID = stringPreferencesKey("last_preset_id")
         val KEY_LAST_THINKING_LEVEL = stringPreferencesKey("last_thinking_level")
+        val KEY_LAST_TOOL_MODE = stringPreferencesKey("last_tool_mode")
     }
 
     suspend fun getAssistants(): List<AssistantConfig> {
@@ -103,6 +105,8 @@ class SettingsDataStore @Inject constructor(
         val presetId: String?,
         /** 上次会话思考量(序列化字符串,见 [com.nuttavern.data.model.ThinkingLevel.serialize])。 */
         val thinkingLevel: String?,
+        /** 上次会话内置工具三态(序列化字符串,见 [ConversationToolMode.storageValue])。 */
+        val toolMode: String?,
     )
 
     suspend fun getLastChatState(): LastChatState {
@@ -113,6 +117,7 @@ class SettingsDataStore @Inject constructor(
             personaId = prefs[KEY_LAST_PERSONA_ID]?.takeIf { it.isNotBlank() },
             presetId = prefs[KEY_LAST_PRESET_ID]?.takeIf { it.isNotBlank() },
             thinkingLevel = prefs[KEY_LAST_THINKING_LEVEL]?.takeIf { it.isNotBlank() },
+            toolMode = prefs[KEY_LAST_TOOL_MODE]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -123,6 +128,7 @@ class SettingsDataStore @Inject constructor(
             putOrRemove(prefs, KEY_LAST_PERSONA_ID, state.personaId)
             putOrRemove(prefs, KEY_LAST_PRESET_ID, state.presetId)
             putOrRemove(prefs, KEY_LAST_THINKING_LEVEL, state.thinkingLevel)
+            putOrRemove(prefs, KEY_LAST_TOOL_MODE, state.toolMode)
         }
     }
 

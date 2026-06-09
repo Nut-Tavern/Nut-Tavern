@@ -6,6 +6,7 @@ import com.nuttavern.data.local.dao.MessageDao
 import com.nuttavern.data.local.entity.ConversationEntity
 import com.nuttavern.data.local.entity.MessageEntity
 import com.nuttavern.data.model.ConversationSummary
+import com.nuttavern.data.tools.ConversationToolMode
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.data.model.ThinkingLevel
@@ -208,6 +209,7 @@ class ConversationRepository @Inject constructor(
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
             thinkingLevel = ThinkingLevel.parse(thinkingLevel),
+            toolMode = ConversationToolMode.fromStorage(toolMode),
         )
     }
 
@@ -227,6 +229,7 @@ class ConversationRepository @Inject constructor(
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
             thinkingLevel = ThinkingLevel.serialize(thinkingLevel),
+            toolMode = toolMode.storageValue,
         )
     }
 

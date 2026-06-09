@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 17,
+    version = 18,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -274,6 +274,21 @@ abstract class NutTavernDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 if (!db.hasColumn("messages", "attachmentsJson")) {
                     db.execSQL("ALTER TABLE `messages` ADD COLUMN `attachmentsJson` TEXT NOT NULL DEFAULT '[]'")
+                }
+            }
+        }
+
+        /**
+         * 会话加 toolMode 字段:内置工具开关模式(follow_global / force_on / force_off)。
+         *
+         * 老会话默认 'follow_global' = 跟随全局默认开关,与升级前"工具全局生效"行为对齐。
+         */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("conversations", "toolMode")) {
+                    db.execSQL(
+                        "ALTER TABLE `conversations` ADD COLUMN `toolMode` TEXT NOT NULL DEFAULT 'follow_global'",
+                    )
                 }
             }
         }

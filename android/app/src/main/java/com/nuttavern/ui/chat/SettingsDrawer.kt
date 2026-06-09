@@ -14,11 +14,13 @@ import com.composables.icons.lucide.BookUser
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.PanelRightClose
 import com.composables.icons.lucide.Regex
+import com.composables.icons.lucide.Server
 import com.composables.icons.lucide.SlidersHorizontal
 import com.composables.icons.lucide.Table
 import com.composables.icons.lucide.TableOfContents
 import com.composables.icons.lucide.TableProperties
 import com.composables.icons.lucide.UserRound
+import com.composables.icons.lucide.Wrench
 import com.nuttavern.data.character.Character
 import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.Preset
@@ -62,11 +64,13 @@ internal fun SettingsDrawer(
     globalRegexScripts: List<RegexScript>,
     regexCounts: Pair<Int, Int>,
     lorebookCounts: Pair<Int, Int>,
+    toolModeSubtitle: String,
     onOpenUnavailableFeature: (String) -> Unit,
     onOpenPersonaPicker: () -> Unit,
     onOpenPresetPicker: () -> Unit,
     onOpenRegexPicker: () -> Unit,
     onOpenLorebookPicker: () -> Unit,
+    onOpenToolModePicker: () -> Unit,
     onNavigateToCharacterDetail: (characterId: String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -116,6 +120,26 @@ internal fun SettingsDrawer(
                     LorebookEntryRow(
                         counts = lorebookCounts,
                         onClick = onOpenLorebookPicker,
+                    )
+                }
+            }
+
+            item(key = "section-tools") {
+                NutTavernGroupSection {
+                    NutTavernIconRow(
+                        icon = Lucide.Wrench,
+                        title = "内置工具",
+                        subtitle = toolModeSubtitle,
+                        showTrailingChevron = true,
+                        onClick = onOpenToolModePicker,
+                    )
+                    NutTavernGroupDivider()
+                    NutTavernIconRow(
+                        icon = Lucide.Server,
+                        title = "MCP 服务器",
+                        subtitle = "暂未接入",
+                        showTrailingChevron = true,
+                        onClick = { onOpenUnavailableFeature("MCP 服务器") },
                     )
                 }
             }

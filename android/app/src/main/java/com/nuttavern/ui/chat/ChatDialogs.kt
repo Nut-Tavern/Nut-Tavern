@@ -149,3 +149,45 @@ internal fun DeleteConversationDialog(
     )
 }
 
+/**
+ * 模型调用内置工具前的人工确认弹窗。
+ *
+ * 仅在"执行前需人工确认"开启时弹出。点外部不可关闭(onDismissRequest 等同拒绝),
+ * 避免误触把挂起的工具调用悬空。允许=放行本次调用,拒绝=回灌错误让模型转向用户解释。
+ */
+@Composable
+internal fun ToolApprovalDialog(
+    displayName: String,
+    argumentsJson: String,
+    onAllow: () -> Unit,
+    onDeny: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDeny,
+        title = { Text("允许调用工具？", style = MaterialTheme.typography.titleLarge) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "模型请求调用「$displayName」。",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (argumentsJson.isNotBlank()) {
+                    Text(
+                        text = "参数:$argumentsJson",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onAllow) { Text("允许") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDeny) {
+                Text("拒绝", color = MaterialTheme.colorScheme.error)
+            }
+        },
+    )
+}
+

@@ -572,7 +572,8 @@ private fun OpenAiProviderFields(
         HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
         ProviderToggleRow(
             label = "Responses API",
-            description = "启用后请求体改用 OpenAI Responses 格式;当前实现仍走 Chat Completions,留作后续轮接入",
+            description = "启用后请求改用 OpenAI Responses 格式(/v1/responses)。" +
+                "注意:Responses 路径暂不支持客户端内置工具,需要内置工具请关闭此项走 Chat Completions。",
             checked = provider.useResponsesApi,
             onCheckedChange = { onUpdate(provider.copy(useResponsesApi = it)) },
         )

@@ -54,14 +54,12 @@ import com.composables.icons.lucide.Brain
 import com.composables.icons.lucide.Camera
 import com.composables.icons.lucide.Check
 import com.composables.icons.lucide.CircleStop
-import com.composables.icons.lucide.Cpu
 import com.composables.icons.lucide.FileUp
 import com.composables.icons.lucide.Image
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Maximize2
 import com.composables.icons.lucide.Paperclip
 import com.composables.icons.lucide.Send
-import com.composables.icons.lucide.Server
 import com.composables.icons.lucide.X
 import com.nuttavern.data.model.EffortTier
 import com.nuttavern.data.model.ImageAttachment
@@ -168,7 +166,6 @@ fun ChatComposer(
                     onOpenAttachmentSheet = { activeSheet = ComposerSheet.Attachments },
                     onOpenModelPicker = onOpenModelPicker,
                     onOpenThinkingSheet = { activeSheet = ComposerSheet.Thinking },
-                    onOpenMcpSheet = { activeSheet = ComposerSheet.Mcp },
                     onSend = { onSendDraft(draft) },
                     onStop = onStopGeneration,
                 )
@@ -192,7 +189,6 @@ fun ChatComposer(
             onSelectLevel = onSelectThinkingLevel,
             onDismiss = { activeSheet = null },
         )
-        ComposerSheet.Mcp -> McpInfoSheet(onDismiss = { activeSheet = null })
         null -> Unit
     }
 
@@ -291,7 +287,6 @@ private fun ChatComposerToolbar(
     onOpenAttachmentSheet: () -> Unit,
     onOpenModelPicker: () -> Unit,
     onOpenThinkingSheet: () -> Unit,
-    onOpenMcpSheet: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -323,12 +318,6 @@ private fun ChatComposerToolbar(
             icon = Lucide.Brain,
             contentDescription = "设置思考量",
             onClick = onOpenThinkingSheet,
-        )
-
-        NutTavernInputToolbarButton(
-            icon = Lucide.Server,
-            contentDescription = "第三方 MCP",
-            onClick = onOpenMcpSheet,
         )
 
         Spacer(modifier = Modifier.weight(1f))
@@ -504,46 +493,6 @@ private fun PendingAttachmentStrip(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun McpInfoSheet(
-    onDismiss: () -> Unit,
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        dragHandle = { BottomSheetDefaults.DragHandle() },
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionLabelBottomSpacing),
-        ) {
-            NutTavernSheetTitle(
-                title = "第三方 MCP",
-                description = "这里指第三方 MCP 服务器能力，不包含工作区文件读写权限。本轮仅说明入口，不提供假开关。",
-            )
-            // 占位项,后续接入会话级 MCP 配置后改为真实跳转。当前点击不响应,
-            // 描述文字明确说明"暂未接入",避免假按钮误导。
-            NutTavernGroupSection {
-                NutTavernIconRow(
-                    icon = Lucide.Server,
-                    title = "MCP 服务器",
-                    subtitle = "暂未接入会话级第三方 MCP 配置",
-                    onClick = {},
-                )
-                NutTavernGroupDivider()
-                NutTavernIconRow(
-                    icon = Lucide.Cpu,
-                    title = "工具权限",
-                    subtitle = "后续仅控制第三方 MCP 工具，不代表工作区读写权限",
-                    onClick = {},
-                )
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
 private fun ThinkingLevelSheet(
     currentLevel: ThinkingLevel,
     onSelectLevel: (ThinkingLevel) -> Unit,
@@ -644,7 +593,6 @@ private const val ThinkingDefaultCustomTokens = 4_096
 private enum class ComposerSheet {
     Attachments,
     Thinking,
-    Mcp,
 }
 
 private val ComposerSingleLineTextHeight = 30.dp

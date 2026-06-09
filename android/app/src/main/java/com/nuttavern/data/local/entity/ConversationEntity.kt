@@ -64,4 +64,14 @@ data class ConversationEntity(
      * budget:4096 等)。null = 老会话迁移上来的兜底,加载时退化为"自动"。
      */
     @ColumnInfo(defaultValue = "NULL") val thinkingLevel: String? = null,
+    /**
+     * 当前会话的内置工具开关模式。三态:
+     * - `follow_global`:跟随全局默认开关([com.nuttavern.data.tools.LocalToolsSettings.defaultEnabled]);
+     * - `force_on`:本会话强制启用工具;
+     * - `force_off`:本会话强制关闭工具。
+     *
+     * 存 [com.nuttavern.data.tools.ConversationToolMode] 的序列化值。新会话与老会话迁移上来都默认
+     * `follow_global`,语义稳定:全局默认变了,跟随态的会话也跟着变,强制态的不受影响。
+     */
+    @ColumnInfo(defaultValue = "'follow_global'") val toolMode: String = "follow_global",
 )

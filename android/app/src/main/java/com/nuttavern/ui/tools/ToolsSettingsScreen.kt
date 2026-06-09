@@ -1,13 +1,13 @@
 package com.nuttavern.ui.tools
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -18,7 +18,6 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -62,12 +61,12 @@ import com.nuttavern.ui.viewmodel.ToolsViewModel
 @Composable
 fun ToolsSettingsScreen(
     onBack: () -> Unit,
+    onOpenLocalTools: () -> Unit,
     viewModel: ToolsViewModel = hiltViewModel(),
 ) {
     val settings by viewModel.settings.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     var pendingFeatureNotice by remember { mutableStateOf<String?>(null) }
-    var pickReasoningMode by remember { mutableStateOf(false) }
 
     LaunchedEffect(pendingFeatureNotice) {
         val name = pendingFeatureNotice ?: return@LaunchedEffect
@@ -106,7 +105,7 @@ fun ToolsSettingsScreen(
                         title = "内置工具",
                         subtitle = "客户端自带的工具,按工具开关",
                         showTrailingChevron = true,
-                        onClick = { pendingFeatureNotice = "内置工具" },
+                        onClick = onOpenLocalTools,
                     )
                     NutTavernGroupDivider()
                     NutTavernIconRow(
@@ -131,22 +130,10 @@ fun ToolsSettingsScreen(
                     NutTavernGroupDivider()
                     ReasoningModeRow(
                         value = settings.toolReasoningMode,
-                        onClick = { pickReasoningMode = true },
                     )
                 }
             }
         }
-    }
-
-    if (pickReasoningMode) {
-        ReasoningModePickerDialog(
-            current = settings.toolReasoningMode,
-            onSelect = {
-                viewModel.setReasoningMode(it)
-                pickReasoningMode = false
-            },
-            onDismiss = { pickReasoningMode = false },
-        )
     }
 }
 
@@ -169,101 +156,43 @@ private fun RecurseLimitRow(
 @Composable
 private fun ReasoningModeRow(
     value: ToolReasoningMode,
-    onClick: () -> Unit,
 ) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        onClick = onClick,
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "工具推理模式",
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = reasoningModeLabel(value),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Text(
-                text = "工具推理模式",
-                modifier = Modifier.weight(1f),
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = reasoningModeLabel(value),
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.primary,
+                text = "暂未接入工具调用链 reasoning 传递,当前固定不转发 reasoning。",
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
-}
-
-@Composable
-private fun ReasoningModePickerDialog(
-    current: ToolReasoningMode,
-    onSelect: (ToolReasoningMode) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("选择工具推理模式") },
-        text = {
-            androidx.compose.foundation.layout.Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                ToolReasoningMode.entries.forEach { mode ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = if (mode == current) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerHigh
-                        },
-                        contentColor = if (mode == current) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurface
-                        },
-                        onClick = { onSelect(mode) },
-                    ) {
-                        androidx.compose.foundation.layout.Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp),
-                        ) {
-                            Text(
-                                text = reasoningModeLabel(mode),
-                                style = MaterialTheme.typography.bodyLarge,
-                            )
-                            Text(
-                                text = reasoningModeDescription(mode),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (mode == current) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
-        },
-    )
 }
 
 private fun reasoningModeLabel(mode: ToolReasoningMode): String = when (mode) {
     ToolReasoningMode.DISABLED -> "禁用"
     ToolReasoningMode.SINCE_LAST_USER -> "最近一轮起"
     ToolReasoningMode.ACTIVE_CHAIN -> "完整链"
-}
-
-private fun reasoningModeDescription(mode: ToolReasoningMode): String = when (mode) {
-    ToolReasoningMode.DISABLED -> "不带任何上一轮的 reasoning(默认,最省 token)"
-    ToolReasoningMode.SINCE_LAST_USER -> "只带最近一条用户消息之后的 reasoning(平衡)"
-    ToolReasoningMode.ACTIVE_CHAIN -> "带整个工具调用链的 reasoning(最贵,适合长工具链)"
 }

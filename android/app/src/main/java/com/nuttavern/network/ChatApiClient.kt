@@ -67,6 +67,8 @@ class ChatApiClient @Inject constructor() {
         generationParams: GenerationParams = GenerationParams.Empty,
         tools: List<ChatTool> = emptyList(),
         toolCallRecurseLimit: Int = 0,
+        requireToolApproval: Boolean = false,
+        approveToolCall: ToolCallApprover? = null,
     ): Flow<ChatStreamChunk> {
         val effective = effectiveProvider(provider, model)
         // thinkingLevel 是会话级思考量(ChatViewModel.currentThinkingLevel)。预设级覆盖
@@ -82,7 +84,7 @@ class ChatApiClient @Inject constructor() {
                 } else {
                     streamOpenAI(
                         effective, model, messages, systemPrompt, effectiveThinking, generationParams,
-                        activeTools, toolCallRecurseLimit,
+                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
                     )
                 }
             }
@@ -158,8 +160,9 @@ class ChatApiClient @Inject constructor() {
         apiKey = apiKey.ifBlank { parent.apiKey },
         baseUrl = baseUrl.ifBlank { parent.baseUrl },
         chatCompletionsPath = chatCompletionsPath.ifBlank { parent.chatCompletionsPath },
-        // useResponsesApi 是 boolean,Override 的取值即"显式配置";没有"空"语义,直接覆盖。
-        useResponsesApi = useResponsesApi,
+        // useResponsesApi 目前只在 Provider 详情页暴露,模型级 Override UI 没有这个开关。
+        // 因此这里继承父 Provider,避免新建 Override 的默认 false 悄悄关闭父级 Responses API。
+        useResponsesApi = parent.useResponsesApi,
     )
 
     private fun Provider.Google.mergeOnto(parent: Provider.Google): Provider.Google = copy(
@@ -195,6 +198,8 @@ class ChatApiClient @Inject constructor() {
         generationParams: GenerationParams,
         tools: List<ChatTool>,
         toolCallRecurseLimit: Int,
+        requireToolApproval: Boolean,
+        approveToolCall: ToolCallApprover?,
     ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
@@ -239,7 +244,7 @@ class ChatApiClient @Inject constructor() {
                     conversation.add(assistantToolCallMessage(outcome.calls))
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = executeToolCall(toolsByName, call)
+                        val result = executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
                         conversation.add(toolResultMessage(call.id, result))
                     }
                     remainingToolRounds -= 1
@@ -345,28 +350,57 @@ class ChatApiClient @Inject constructor() {
 
     /** 流结束:有 tool_calls 走工具分支,否则视为普通文本完成。 */
     private fun buildRoundResult(builders: Map<Int, ToolCallBuilder>): OpenAIRoundResult {
-        val calls = builders.values
-            .filter { it.name.isNotBlank() }
-            .map { OpenAIToolCall(id = it.id, name = it.name, arguments = it.arguments.toString()) }
-        return if (calls.isEmpty()) OpenAIRoundResult.Completed else OpenAIRoundResult.ToolCalls(calls)
+        val namedCalls = builders.values.filter { it.name.isNotBlank() }
+        if (namedCalls.isEmpty()) return OpenAIRoundResult.Completed
+        // tool_call 缺 id 时,后续回灌的 assistant.tool_calls / tool.tool_call_id 会带空串,OpenAI 下一轮
+        // 大概率 400。这里提前判成协议错误,给出明确文案,而不是放任空 id 流到下一轮变成网络错误。
+        if (namedCalls.any { it.id.isBlank() }) {
+            return OpenAIRoundResult.Failed("模型返回的工具调用缺少 id,无法继续执行")
+        }
+        val calls = namedCalls.map {
+            OpenAIToolCall(id = it.id, name = it.name, arguments = it.arguments.toString())
+        }
+        return OpenAIRoundResult.ToolCalls(calls)
     }
 
-    /** 执行单个工具调用,失败时返回错误 JSON 回灌给模型(让模型自己决定如何处理)。 */
+    /**
+     * 执行单个工具调用,失败时返回错误 JSON 回灌给模型(让模型自己决定如何处理)。
+     *
+     * 若 [approveToolCall] 非空,先请求人工确认:拒绝则不执行,回灌"用户拒绝调用"让模型转而向
+     * 用户解释。确认逻辑在调用方(ViewModel)挂起等待用户点按。
+     */
     private suspend fun executeToolCall(
         toolsByName: Map<String, ChatTool>,
         call: OpenAIToolCall,
+        requireApproval: Boolean,
+        approveToolCall: ToolCallApprover?,
     ): String {
         val tool = toolsByName[call.name]
             ?: return JSONObject().put("error", "unknown tool: ${call.name}").toString()
-        val arguments = try {
-            if (call.arguments.isBlank()) JSONObject() else JSONObject(call.arguments)
-        } catch (_: Exception) {
-            JSONObject()
+        // 实参必须是合法 JSON 对象。非法时不执行工具,回灌结构化错误让模型自我修正,而不是
+        // 退化成空对象继续执行(对有参/有副作用的工具会造成"参数坏了也执行")。
+        val arguments = when {
+            call.arguments.isBlank() -> JSONObject()
+            else -> try {
+                JSONObject(call.arguments)
+            } catch (_: Exception) {
+                return JSONObject().put("error", "invalid tool arguments: not a valid JSON object").toString()
+            }
+        }
+        // 是否拦截 = 全局开关 或 工具自身标注需要确认。任一为真都要人工确认,
+        // 避免高风险工具在全局确认关闭时被自动执行。
+        if ((requireApproval || tool.needsApproval) && approveToolCall != null) {
+            val approved = approveToolCall.invoke(tool.displayName, tool.name, arguments.toString())
+            if (!approved) {
+                return JSONObject().put("error", "用户拒绝了本次工具调用").toString()
+            }
         }
         return try {
             tool.execute(arguments)
         } catch (e: Exception) {
-            JSONObject().put("error", e.message ?: "tool execution failed").toString()
+            // 详细异常只进本地日志,回灌给模型的是稳定低敏文案,避免泄露本地路径 / 实现细节。
+            android.util.Log.w("ChatApiClient", "tool execution failed: ${tool.name}", e)
+            JSONObject().put("error", "tool execution failed").toString()
         }
     }
 

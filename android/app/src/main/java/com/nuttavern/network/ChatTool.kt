@@ -11,14 +11,33 @@ import org.json.JSONObject
  * 网络层([ChatApiClient])负责把 [parametersSchema] 注入请求体的 `tools` 字段、解析模型返回的
  * tool_calls、调用 [execute] 拿结果、再回灌发起下一轮请求。工具自身只关心"给参数、出结果"。
  *
- * @property name 工具名,下发给模型并用于匹配 tool_call。必须稳定、语义明确。
+ * @property id 工具稳定标识,用于持久化启用状态与设置页枚举。与 [name] 通常一致,但 [id] 永不变,
+ *   [name] 是下发给模型的函数名。
+ * @property name 下发给模型的函数名,用于匹配 tool_call。必须稳定、语义明确。
+ * @property displayName 设置页 / 确认弹窗展示用的中文名。
  * @property description 工具用途说明,模型据此决定是否调用。
  * @property parametersSchema JSON Schema(object 类型)。无参数工具传 `{"type":"object","properties":{}}`。
+ * @property needsApproval 该工具是否默认建议人工确认(有副作用的工具置 true)。实际是否拦截由
+ *   全局「执行前需人工确认」开关决定,这里只是工具自身的风险标注。
  * @property execute 执行体。入参是模型给出的实参(解析后的 JSON,无参数时为空对象),返回纯文本结果。
  */
 data class ChatTool(
+    val id: String,
     val name: String,
+    val displayName: String,
     val description: String,
     val parametersSchema: JSONObject,
+    val needsApproval: Boolean = false,
     val execute: suspend (arguments: JSONObject) -> String,
 )
+
+/**
+ * 工具调用人工确认回调。在执行工具前调用,返回 true 放行、false 拒绝。
+ *
+ * 由 ViewModel 提供:挂起弹出确认 UI,等用户点按后 resume。为空表示不需要确认(全自动执行)。
+ *
+ * @param displayName 工具中文名(展示用)
+ * @param toolName 工具函数名
+ * @param argumentsJson 模型给出的实参 JSON 字符串(展示用)
+ */
+typealias ToolCallApprover = suspend (displayName: String, toolName: String, argumentsJson: String) -> Boolean

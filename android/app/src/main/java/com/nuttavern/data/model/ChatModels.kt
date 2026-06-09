@@ -42,6 +42,12 @@ data class ConversationSummary(
      * null 等价 [ThinkingLevel.Auto]("自动",不向后端发送思考字段)。
      */
     val thinkingLevel: ThinkingLevel = ThinkingLevel.Auto,
+    /**
+     * 当前会话的内置工具开关模式(跟随全局 / 强制开 / 强制关)。会话级,切会话各自保留。
+     * 默认 [ConversationToolMode.FOLLOW_GLOBAL],跟随全局默认开关。
+     */
+    val toolMode: com.nuttavern.data.tools.ConversationToolMode =
+        com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL,
 )
 
 data class Message(

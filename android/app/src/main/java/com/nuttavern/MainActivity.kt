@@ -66,6 +66,7 @@ private object Routes {
     const val RegexDetail = "settings/regex/{regexId}"
     const val RegexGroupScriptDetail = "settings/regex/group/{groupId}/script/{scriptId}"
     const val Tools = "settings/tools"
+    const val LocalTools = "settings/tools/local"
     const val Lorebooks = "settings/lorebooks"
     const val LorebookDetail = "settings/lorebooks/{lorebookId}"
     const val LorebookEntryDetail = "settings/lorebooks/{lorebookId}/entry/{entryUid}"
@@ -455,6 +456,26 @@ private fun NutTavernNavGraph() {
             },
         ) {
             ToolsSettingsScreen(
+                onBack = { navController.popBackStack() },
+                onOpenLocalTools = { navController.navigate(Routes.LocalTools) },
+            )
+        }
+        composable(
+            Routes.LocalTools,
+            enterTransition = {
+                slideInHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    initialOffsetX = { it },
+                )
+            },
+            popExitTransition = {
+                slideOutHorizontally(
+                    animationSpec = tween(NAV_SLIDE_DURATION_MILLIS),
+                    targetOffsetX = { it },
+                )
+            },
+        ) {
+            com.nuttavern.ui.tools.LocalToolsScreen(
                 onBack = { navController.popBackStack() },
             )
         }
