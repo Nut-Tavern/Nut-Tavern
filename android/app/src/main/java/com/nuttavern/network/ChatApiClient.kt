@@ -75,12 +75,14 @@ class ChatApiClient @Inject constructor() {
         // (thinkingLevelOverride)是前向 hook,当前 PromptComposer 恒传 null,故实际走会话级。
         val effectiveThinking = generationParams.thinkingLevelOverride ?: thinkingLevel
         // 工具门控:仅模型声明 TOOL 能力且注册表非空时才参与 function calling。
-        // 当前只有 OpenAI chat completions 路径接了本地工具,其余协议忽略 tools。
         val activeTools = if (model.abilities.contains(ModelAbility.TOOL)) tools else emptyList()
         return when (effective) {
             is Provider.OpenAI -> {
                 if (effective.useResponsesApi) {
-                    streamOpenAIResponses(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
+                    streamOpenAIResponses(
+                        effective, model, messages, systemPrompt, effectiveThinking, generationParams,
+                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+                    )
                 } else {
                     streamOpenAI(
                         effective, model, messages, systemPrompt, effectiveThinking, generationParams,
@@ -89,7 +91,10 @@ class ChatApiClient @Inject constructor() {
                 }
             }
             is Provider.Google -> streamGoogle(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
-            is Provider.Claude -> streamClaude(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
+            is Provider.Claude -> streamClaude(
+                effective, model, messages, systemPrompt, effectiveThinking, generationParams,
+                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+            )
         }
     }
 
@@ -212,10 +217,10 @@ class ChatApiClient @Inject constructor() {
         // 本地执行工具、把 assistant(tool_calls) 与 tool 结果追加进历史,再发下一轮。
         // 轮数受 toolCallRecurseLimit 约束(达到上限后最后一轮不再带 tools,强制模型给文本回复)。
         val conversation = messages.toMutableList()
-        var remainingToolRounds = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
+        var remainingToolCalls = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
 
         while (true) {
-            val allowTools = remainingToolRounds > 0
+            val allowTools = remainingToolCalls > 0
             val body = buildOpenAIRequest(
                 model, conversation, systemPrompt, thinkingLevel, generationParams,
                 if (allowTools) tools else emptyList(),
@@ -244,10 +249,14 @@ class ChatApiClient @Inject constructor() {
                     conversation.add(assistantToolCallMessage(outcome.calls))
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                        val result = if (remainingToolCalls > 0) {
+                            remainingToolCalls -= 1
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                        } else {
+                            toolCallLimitExceededResult()
+                        }
                         conversation.add(toolResultMessage(call.id, result))
                     }
-                    remainingToolRounds -= 1
                 }
             }
         }
@@ -260,11 +269,11 @@ class ChatApiClient @Inject constructor() {
         /** 网络 / 解析错误。 */
         data class Failed(val error: String) : OpenAIRoundResult
         /** 模型要求调用工具,需本地执行后回灌再发下一轮。 */
-        data class ToolCalls(val calls: List<OpenAIToolCall>) : OpenAIRoundResult
+        data class ToolCalls(val calls: List<LocalToolCall>) : OpenAIRoundResult
     }
 
-    /** 模型返回的单个 tool_call(arguments 已按流式分片拼接完成)。 */
-    private data class OpenAIToolCall(
+    /** 模型返回的单个本地工具调用(arguments 已按流式分片拼接完成)。 */
+    private data class LocalToolCall(
         val id: String,
         val name: String,
         val arguments: String,
@@ -327,6 +336,45 @@ class ChatApiClient @Inject constructor() {
         continuation.invokeOnCancellation { eventSource.cancel() }
     }
 
+    private fun accumulateClaudeToolStart(
+        json: JSONObject,
+        builders: MutableMap<Int, ToolCallBuilder>,
+    ) {
+        val block = json.optJSONObject("content_block") ?: return
+        if (block.optCleanString("type") != "tool_use") return
+        val index = json.optInt("index", builders.size)
+        val builder = builders.getOrPut(index) { ToolCallBuilder() }
+        block.optCleanString("id").takeIf { it.isNotEmpty() }?.let { builder.id = it }
+        block.optCleanString("name").takeIf { it.isNotEmpty() }?.let { builder.name = it }
+        block.optJSONObject("input")?.let {
+            builder.arguments.clear()
+            builder.arguments.append(it.toString())
+        }
+    }
+
+    private fun accumulateClaudeToolDelta(
+        json: JSONObject,
+        builders: MutableMap<Int, ToolCallBuilder>,
+    ) {
+        val delta = json.optJSONObject("delta") ?: return
+        if (delta.optCleanString("type") != "input_json_delta") return
+        val index = json.optInt("index", builders.size)
+        val builder = builders.getOrPut(index) { ToolCallBuilder() }
+        delta.optCleanString("partial_json").takeIf { it.isNotEmpty() }?.let { builder.arguments.append(it) }
+    }
+
+    private fun buildClaudeRoundResult(builders: Map<Int, ToolCallBuilder>): OpenAIRoundResult {
+        val namedCalls = builders.values.filter { it.name.isNotBlank() }
+        if (namedCalls.isEmpty()) return OpenAIRoundResult.Completed
+        if (namedCalls.any { it.id.isBlank() }) {
+            return OpenAIRoundResult.Failed("Claude 返回的工具调用缺少 id,无法继续执行")
+        }
+        val calls = namedCalls.map {
+            LocalToolCall(id = it.id, name = it.name, arguments = it.arguments.toString())
+        }
+        return OpenAIRoundResult.ToolCalls(calls)
+    }
+
     /** tool_calls 分片累积器(同一 index 的 id/name 只来一次,arguments 分多片拼接)。 */
     private class ToolCallBuilder {
         var id: String = ""
@@ -358,7 +406,7 @@ class ChatApiClient @Inject constructor() {
             return OpenAIRoundResult.Failed("模型返回的工具调用缺少 id,无法继续执行")
         }
         val calls = namedCalls.map {
-            OpenAIToolCall(id = it.id, name = it.name, arguments = it.arguments.toString())
+            LocalToolCall(id = it.id, name = it.name, arguments = it.arguments.toString())
         }
         return OpenAIRoundResult.ToolCalls(calls)
     }
@@ -371,7 +419,7 @@ class ChatApiClient @Inject constructor() {
      */
     private suspend fun executeToolCall(
         toolsByName: Map<String, ChatTool>,
-        call: OpenAIToolCall,
+        call: LocalToolCall,
         requireApproval: Boolean,
         approveToolCall: ToolCallApprover?,
     ): String {
@@ -389,7 +437,11 @@ class ChatApiClient @Inject constructor() {
         }
         // 是否拦截 = 全局开关 或 工具自身标注需要确认。任一为真都要人工确认,
         // 避免高风险工具在全局确认关闭时被自动执行。
-        if ((requireApproval || tool.needsApproval) && approveToolCall != null) {
+        val approvalRequired = requireApproval || tool.needsApproval
+        if (approvalRequired && approveToolCall == null) {
+            return JSONObject().put("error", "tool approval required but no approver is available").toString()
+        }
+        if (approvalRequired && approveToolCall != null) {
             val approved = approveToolCall.invoke(tool.displayName, tool.name, arguments.toString())
             if (!approved) {
                 return JSONObject().put("error", "用户拒绝了本次工具调用").toString()
@@ -403,6 +455,9 @@ class ChatApiClient @Inject constructor() {
             JSONObject().put("error", "tool execution failed").toString()
         }
     }
+
+    private fun toolCallLimitExceededResult(): String =
+        JSONObject().put("error", "tool call limit exceeded for this response").toString()
 
     // ── OpenAI Responses API SSE ──────────────────────
     //
@@ -425,84 +480,179 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
-    ): Flow<ChatStreamChunk> = callbackFlow {
-        val jsonBody = buildOpenAIResponsesRequest(model, messages, systemPrompt, thinkingLevel, generationParams)
+        tools: List<ChatTool>,
+        toolCallRecurseLimit: Int,
+        requireToolApproval: Boolean,
+        approveToolCall: ToolCallApprover?,
+    ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
             apiVersion = OPENAI_API_VERSION,
             endpointPath = OPENAI_RESPONSES_ENDPOINT,
         )
+        val toolsByName = tools.associateBy { it.name }
+        val conversation = messages.toMutableList()
+        var remainingToolCalls = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
 
-        val request = Request.Builder()
-            .url(url)
-            .header("Authorization", "Bearer ${provider.apiKey}")
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .applyCustomHeaders(model)
-            .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        while (true) {
+            val allowTools = remainingToolCalls > 0
+            val jsonBody = buildOpenAIResponsesRequest(
+                model = model,
+                messages = conversation,
+                systemPrompt = systemPrompt,
+                thinkingLevel = thinkingLevel,
+                generationParams = generationParams,
+                tools = if (allowTools) tools else emptyList(),
+            )
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${provider.apiKey}")
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .applyCustomHeaders(model)
+                .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            when (val outcome = streamOpenAIResponsesRound(request, url)) {
+                is OpenAIRoundResult.Failed -> {
+                    send(ChatStreamChunk(content = "", isDone = true, error = outcome.error))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.Completed -> {
+                    send(ChatStreamChunk(content = "", isDone = true))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.ToolCalls -> {
+                    conversation.addAll(openAIResponsesToolInputMessages(outcome.calls))
+                    for (call in outcome.calls) {
+                        send(ChatStreamChunk(content = "", toolActivity = call.name))
+                        val result = if (remainingToolCalls > 0) {
+                            remainingToolCalls -= 1
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                        } else {
+                            toolCallLimitExceededResult()
+                        }
+                        conversation.add(openAIResponsesToolResultMessage(call.id, result))
+                    }
+                }
+            }
+        }
+    }
+
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<ChatStreamChunk>.streamOpenAIResponsesRound(
+        request: Request,
+        url: String,
+    ): OpenAIRoundResult = suspendCancellableCoroutine { continuation ->
+        val toolCallBuilders = linkedMapOf<String, ToolCallBuilder>()
+        val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun finish(result: OpenAIRoundResult) {
+            if (resumed.compareAndSet(false, true)) continuation.resume(result)
+        }
 
         val listener = object : EventSourceListener() {
-            private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 try {
                     when (type) {
                         "response.output_text.delta" -> {
                             val text = JSONObject(data).optCleanString("delta")
-                            if (text.isNotEmpty()) {
-                                trySend(ChatStreamChunk(content = text))
-                            }
+                            if (text.isNotEmpty()) trySend(ChatStreamChunk(content = text))
                         }
                         "response.reasoning_summary_text.delta",
                         "response.reasoning_text.delta" -> {
-                            // GPT-5 / o-series 走 reasoning_summary_text;部分模型直接发 reasoning_text。
                             val reasoning = JSONObject(data).optCleanString("delta")
                             if (reasoning.isNotEmpty()) {
                                 trySend(ChatStreamChunk(content = "", reasoningContent = reasoning))
                             }
                         }
+                        "response.output_item.added",
+                        "response.output_item.done" -> accumulateResponsesToolItem(JSONObject(data), toolCallBuilders)
+                        "response.function_call_arguments.delta" -> {
+                            val json = JSONObject(data)
+                            val builder = responsesToolBuilderForEvent(json, toolCallBuilders)
+                            json.optCleanString("delta").takeIf { it.isNotEmpty() }?.let { builder.arguments.append(it) }
+                        }
+                        "response.function_call_arguments.done" -> {
+                            val json = JSONObject(data)
+                            val builder = responsesToolBuilderForEvent(json, toolCallBuilders)
+                            json.optCleanString("arguments").takeIf { it.isNotEmpty() }?.let {
+                                builder.arguments.clear()
+                                builder.arguments.append(it)
+                            }
+                        }
                         "response.completed" -> {
-                            completed.set(true)
-                            trySend(ChatStreamChunk(content = "", isDone = true))
                             eventSource.cancel()
+                            finish(buildResponsesRoundResult(toolCallBuilders))
                         }
                         "response.error", "error" -> {
-                            completed.set(true)
                             val message = parseProviderErrorMessage(JSONObject(data))
                                 .ifBlank { "OpenAI Responses 返回错误,请检查模型、API Key 或权限配置" }
-                            trySend(ChatStreamChunk(content = "", isDone = true, error = message))
                             eventSource.cancel()
+                            finish(OpenAIRoundResult.Failed(message))
                         }
-                        // 其余事件(response.created / response.in_progress / response.output_item.* /
-                        // response.content_part.* / response.output_text.done 等)对 UI 流式渲染无信息,忽略。
                     }
                 } catch (_: Exception) {
-                    completed.set(true)
-                    trySend(ChatStreamChunk(content = "", isDone = true, error = "服务返回了无法解析的响应"))
                     eventSource.cancel()
+                    finish(OpenAIRoundResult.Failed("服务返回了无法解析的响应"))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                if (!completed.get()) {
-                    trySend(ChatStreamChunk(content = "", isDone = true))
-                }
-                close()
+                finish(buildResponsesRoundResult(toolCallBuilders))
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                if (completed.get()) {
-                    close()
-                    return
-                }
-                trySend(ChatStreamChunk(content = "", isDone = true, error = buildNetworkErrorMessage(response, t, url)))
-                close()
+                if (resumed.get()) return
+                finish(OpenAIRoundResult.Failed(buildNetworkErrorMessage(response, t, url)))
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
+        continuation.invokeOnCancellation { eventSource.cancel() }
+    }
+
+    private fun accumulateResponsesToolItem(
+        json: JSONObject,
+        builders: MutableMap<String, ToolCallBuilder>,
+    ) {
+        val item = json.optJSONObject("item") ?: return
+        if (item.optCleanString("type") != "function_call") return
+        val key = responsesToolKey(json, item)
+        val outputIndexKey = json.opt("output_index")?.toString().orEmpty()
+        val existingByOutputIndex = outputIndexKey.takeIf { it.isNotBlank() }?.let { builders.remove(it) }
+        val builder = builders.getOrPut(key) { existingByOutputIndex ?: ToolCallBuilder() }
+        item.optCleanString("call_id").takeIf { it.isNotEmpty() }?.let { builder.id = it }
+        item.optCleanString("name").takeIf { it.isNotEmpty() }?.let { builder.name = it }
+        item.optCleanString("arguments").takeIf { it.isNotEmpty() }?.let {
+            builder.arguments.clear()
+            builder.arguments.append(it)
+        }
+    }
+
+    private fun responsesToolBuilderForEvent(
+        json: JSONObject,
+        builders: MutableMap<String, ToolCallBuilder>,
+    ): ToolCallBuilder = builders.getOrPut(responsesToolKey(json, null)) { ToolCallBuilder() }
+
+    private fun responsesToolKey(json: JSONObject, item: JSONObject?): String {
+        val itemId = json.optCleanString("item_id").ifBlank { item?.optCleanString("id").orEmpty() }
+        if (itemId.isNotBlank()) return itemId
+        val outputIndex = json.opt("output_index")?.toString().orEmpty()
+        if (outputIndex.isNotBlank()) return outputIndex
+        val callId = item?.optCleanString("call_id").orEmpty()
+        return callId.ifBlank { "tool_${json.hashCode()}" }
+    }
+
+    private fun buildResponsesRoundResult(builders: Map<String, ToolCallBuilder>): OpenAIRoundResult {
+        val namedCalls = builders.values.filter { it.name.isNotBlank() }
+        if (namedCalls.isEmpty()) return OpenAIRoundResult.Completed
+        if (namedCalls.any { it.id.isBlank() }) {
+            return OpenAIRoundResult.Failed("模型返回的工具调用缺少 call_id,无法继续执行")
+        }
+        val calls = namedCalls.map {
+            LocalToolCall(id = it.id, name = it.name, arguments = it.arguments.toString())
+        }
+        return OpenAIRoundResult.ToolCalls(calls)
     }
 
     // ── Claude Messages SSE ───────────────────────────
@@ -514,47 +664,92 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
-    ): Flow<ChatStreamChunk> = callbackFlow {
-        val jsonBody = buildClaudeRequest(
-            model = model,
-            messages = messages,
-            systemPrompt = systemPrompt,
-            thinkingLevel = thinkingLevel,
-            promptCaching = provider.promptCaching,
-            promptCacheTtl = provider.promptCacheTtl,
-            generationParams = generationParams,
-        )
+        tools: List<ChatTool>,
+        toolCallRecurseLimit: Int,
+        requireToolApproval: Boolean,
+        approveToolCall: ToolCallApprover?,
+    ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
             apiVersion = CLAUDE_API_VERSION,
             endpointPath = CLAUDE_MESSAGES_ENDPOINT,
         )
+        val toolsByName = tools.associateBy { it.name }
+        val conversation = messages.toMutableList()
+        var remainingToolCalls = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
 
-        val request = Request.Builder()
-            .url(url)
-            .header("x-api-key", provider.apiKey)
-            .header("anthropic-version", ANTHROPIC_VERSION)
-            .apply {
-                // 1h TTL 是 beta 能力,需要显式带 beta header,服务端否则返回 400。
-                if (provider.promptCaching && provider.promptCacheTtl == ClaudePromptCacheTtl.ONE_HOUR) {
-                    header("anthropic-beta", ANTHROPIC_BETA_EXTENDED_CACHE_TTL)
+        while (true) {
+            val allowTools = remainingToolCalls > 0
+            val jsonBody = buildClaudeRequest(
+                model = model,
+                messages = conversation,
+                systemPrompt = systemPrompt,
+                thinkingLevel = thinkingLevel,
+                promptCaching = provider.promptCaching,
+                promptCacheTtl = provider.promptCacheTtl,
+                generationParams = generationParams,
+                tools = if (allowTools) tools else emptyList(),
+            )
+            val request = Request.Builder()
+                .url(url)
+                .header("x-api-key", provider.apiKey)
+                .header("anthropic-version", ANTHROPIC_VERSION)
+                .apply {
+                    if (provider.promptCaching && provider.promptCacheTtl == ClaudePromptCacheTtl.ONE_HOUR) {
+                        header("anthropic-beta", ANTHROPIC_BETA_EXTENDED_CACHE_TTL)
+                    }
+                }
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .applyCustomHeaders(model)
+                .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            when (val outcome = streamClaudeRound(request, url)) {
+                is OpenAIRoundResult.Failed -> {
+                    send(ChatStreamChunk(content = "", isDone = true, error = outcome.error))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.Completed -> {
+                    send(ChatStreamChunk(content = "", isDone = true))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.ToolCalls -> {
+                    conversation.add(claudeAssistantToolUseMessage(outcome.calls))
+                    val toolResults = mutableListOf<Pair<String, String>>()
+                    for (call in outcome.calls) {
+                        send(ChatStreamChunk(content = "", toolActivity = call.name))
+                        val result = if (remainingToolCalls > 0) {
+                            remainingToolCalls -= 1
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                        } else {
+                            toolCallLimitExceededResult()
+                        }
+                        toolResults.add(call.id to result)
+                    }
+                    conversation.add(claudeToolResultsMessage(toolResults))
                 }
             }
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .applyCustomHeaders(model)
-            .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        }
+    }
+
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<ChatStreamChunk>.streamClaudeRound(
+        request: Request,
+        url: String,
+    ): OpenAIRoundResult = suspendCancellableCoroutine { continuation ->
+        val toolCallBuilders = linkedMapOf<Int, ToolCallBuilder>()
+        val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun finish(result: OpenAIRoundResult) {
+            if (resumed.compareAndSet(false, true)) continuation.resume(result)
+        }
 
         val listener = object : EventSourceListener() {
-            // 与 OpenAI 路径同款"业务完成"标记。详见 streamOpenAI 的注释。
-            private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 try {
                     val json = JSONObject(data)
-                    val eventType = json.optString("type", "")
-                    when (eventType) {
+                    when (json.optString("type", "")) {
+                        "content_block_start" -> accumulateClaudeToolStart(json, toolCallBuilders)
                         "content_block_delta" -> {
                             val delta = json.optJSONObject("delta")
                             val text = parseClaudeTextDelta(delta)
@@ -562,45 +757,36 @@ class ChatApiClient @Inject constructor() {
                             if (text.isNotEmpty() || reasoningContent.isNotEmpty()) {
                                 trySend(ChatStreamChunk(content = text, reasoningContent = reasoningContent))
                             }
+                            accumulateClaudeToolDelta(json, toolCallBuilders)
                         }
                         "message_stop" -> {
-                            completed.set(true)
-                            trySend(ChatStreamChunk(content = "", isDone = true))
                             eventSource.cancel()
+                            finish(buildClaudeRoundResult(toolCallBuilders))
                         }
                         "error" -> {
-                            completed.set(true)
                             val message = parseProviderErrorMessage(json).ifBlank { "Claude 返回错误,请检查模型、API Key 或权限配置" }
-                            trySend(ChatStreamChunk(content = "", isDone = true, error = message))
                             eventSource.cancel()
+                            finish(OpenAIRoundResult.Failed(message))
                         }
                     }
                 } catch (_: Exception) {
-                    completed.set(true)
-                    trySend(ChatStreamChunk(content = "", isDone = true, error = "服务返回了无法解析的响应"))
                     eventSource.cancel()
+                    finish(OpenAIRoundResult.Failed("服务返回了无法解析的响应"))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                if (!completed.get()) {
-                    trySend(ChatStreamChunk(content = "", isDone = true))
-                }
-                close()
+                finish(buildClaudeRoundResult(toolCallBuilders))
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                if (completed.get()) {
-                    close()
-                    return
-                }
-                trySend(ChatStreamChunk(content = "", isDone = true, error = buildNetworkErrorMessage(response, t, url)))
-                close()
+                if (resumed.get()) return
+                finish(OpenAIRoundResult.Failed(buildNetworkErrorMessage(response, t, url)))
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
+        continuation.invokeOnCancellation { eventSource.cancel() }
     }
 
     // ── Google Gemini SSE ────────────────────────────
@@ -744,7 +930,7 @@ class ChatApiClient @Inject constructor() {
         val request = JSONObject()
             .put("model", model.modelId)
             .put("messages", jsonMessages)
-            .put("stream", generationParams.streamEnabled)
+            .put("stream", true)
 
         applyOpenAIGenerationParams(request, generationParams)
 
@@ -783,7 +969,7 @@ class ChatApiClient @Inject constructor() {
     }
 
     /** 构造一条携带 tool_calls 的 assistant 消息(回灌循环内部用,不持久化)。 */
-    private fun assistantToolCallMessage(calls: List<OpenAIToolCall>): ChatMessage {
+    private fun assistantToolCallMessage(calls: List<LocalToolCall>): ChatMessage {
         val toolCalls = JSONArray()
         calls.forEach { call ->
             toolCalls.put(
@@ -854,12 +1040,24 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
+        tools: List<ChatTool> = emptyList(),
     ): String {
         val input = JSONArray()
         messages.forEach { msg ->
             val role = normalizeOpenAIRole(msg.role)
             if (role.isBlank()) return@forEach
-            if (role == "assistant" || msg.images.isEmpty()) {
+            if (role == "assistant" && msg.toolCalls != null) {
+                for (index in 0 until msg.toolCalls.length()) {
+                    msg.toolCalls.optJSONObject(index)?.let { input.put(it) }
+                }
+            } else if (role == "tool" && msg.toolCallId != null) {
+                input.put(
+                    JSONObject()
+                        .put("type", "function_call_output")
+                        .put("call_id", msg.toolCallId)
+                        .put("output", msg.content),
+                )
+            } else if (role == "assistant" || msg.images.isEmpty()) {
                 // assistant 不带图;无图消息走单文本块。
                 if (msg.content.isBlank()) return@forEach
                 val partType = if (role == "assistant") "output_text" else "input_text"
@@ -888,7 +1086,7 @@ class ChatApiClient @Inject constructor() {
         val request = JSONObject()
             .put("model", model.modelId)
             .put("input", input)
-            .put("stream", generationParams.streamEnabled)
+            .put("stream", true)
         systemPrompt?.takeIf { it.isNotBlank() }?.let {
             request.put("instructions", it)
         }
@@ -905,9 +1103,43 @@ class ChatApiClient @Inject constructor() {
                 request.put("reasoning", JSONObject().put("effort", it))
             }
         }
+        if (tools.isNotEmpty()) {
+            request.put("tools", buildOpenAIResponsesToolsArray(tools))
+        }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
     }
+
+    private fun buildOpenAIResponsesToolsArray(tools: List<ChatTool>): JSONArray {
+        val array = JSONArray()
+        tools.forEach { tool ->
+            array.put(
+                JSONObject()
+                    .put("type", "function")
+                    .put("name", tool.name)
+                    .put("description", tool.description)
+                    .put("parameters", tool.parametersSchema),
+            )
+        }
+        return array
+    }
+
+    private fun openAIResponsesToolInputMessages(calls: List<LocalToolCall>): List<ChatMessage> {
+        val items = JSONArray()
+        calls.forEach { call ->
+            items.put(
+                JSONObject()
+                    .put("type", "function_call")
+                    .put("call_id", call.id)
+                    .put("name", call.name)
+                    .put("arguments", call.arguments),
+            )
+        }
+        return listOf(ChatMessage(role = "assistant", content = "", toolCalls = items))
+    }
+
+    private fun openAIResponsesToolResultMessage(toolCallId: String, result: String): ChatMessage =
+        ChatMessage(role = "tool", content = result, toolCallId = toolCallId)
 
     private fun buildClaudeRequest(
         model: Model,
@@ -917,6 +1149,7 @@ class ChatApiClient @Inject constructor() {
         promptCaching: Boolean,
         promptCacheTtl: ClaudePromptCacheTtl,
         generationParams: GenerationParams,
+        tools: List<ChatTool> = emptyList(),
     ): String {
         val jsonMessages = JSONArray()
         // 多轮场景下我们只在"最后一条 user 消息"上打 cache_control,这样下一轮请求
@@ -925,6 +1158,30 @@ class ChatApiClient @Inject constructor() {
         messages.forEachIndexed { index, msg ->
             val role = normalizeClaudeRole(msg.role)
             if (role.isBlank()) return@forEachIndexed
+            if (role == "assistant" && msg.toolCalls != null) {
+                jsonMessages.put(JSONObject().put("role", "assistant").put("content", msg.toolCalls))
+                return@forEachIndexed
+            }
+            if (msg.role.trim().lowercase() == "tool" && msg.toolCalls != null) {
+                jsonMessages.put(JSONObject().put("role", "user").put("content", msg.toolCalls))
+                return@forEachIndexed
+            }
+            if (msg.role.trim().lowercase() == "tool" && msg.toolCallId != null) {
+                jsonMessages.put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put(
+                            "content",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("type", "tool_result")
+                                    .put("tool_use_id", msg.toolCallId)
+                                    .put("content", msg.content),
+                            ),
+                        ),
+                )
+                return@forEachIndexed
+            }
             val hasContent = msg.content.isNotBlank()
             val hasImages = msg.images.isNotEmpty()
             if (!hasContent && !hasImages) return@forEachIndexed
@@ -962,7 +1219,7 @@ class ChatApiClient @Inject constructor() {
             .put("messages", jsonMessages)
             // Claude 必填 max_tokens;预设没指定时 fallback 到 4096(原默认值)。
             .put("max_tokens", generationParams.maxTokens ?: 4096)
-            .put("stream", generationParams.streamEnabled)
+            .put("stream", true)
 
         // Claude 支持 temperature / top_p / top_k / stop_sequences;不支持 frequency / presence penalty。
         generationParams.temperature?.let {
@@ -990,8 +1247,57 @@ class ChatApiClient @Inject constructor() {
                 request.put("thinking", it)
             }
         }
+        if (tools.isNotEmpty()) {
+            request.put("tools", buildClaudeToolsArray(tools))
+        }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
+    }
+
+    private fun buildClaudeToolsArray(tools: List<ChatTool>): JSONArray {
+        val array = JSONArray()
+        tools.forEach { tool ->
+            array.put(
+                JSONObject()
+                    .put("name", tool.name)
+                    .put("description", tool.description)
+                    .put("input_schema", tool.parametersSchema),
+            )
+        }
+        return array
+    }
+
+    private fun claudeAssistantToolUseMessage(calls: List<LocalToolCall>): ChatMessage {
+        val blocks = JSONArray()
+        calls.forEach { call ->
+            blocks.put(
+                JSONObject()
+                    .put("type", "tool_use")
+                    .put("id", call.id)
+                    .put("name", call.name)
+                    .put("input", parseToolArgumentsForClaudeHistory(call.arguments)),
+            )
+        }
+        return ChatMessage(role = "assistant", content = "", toolCalls = blocks)
+    }
+
+    private fun claudeToolResultsMessage(results: List<Pair<String, String>>): ChatMessage {
+        val blocks = JSONArray()
+        results.forEach { (toolCallId, result) ->
+            blocks.put(
+                JSONObject()
+                    .put("type", "tool_result")
+                    .put("tool_use_id", toolCallId)
+                    .put("content", result),
+            )
+        }
+        return ChatMessage(role = "tool", content = "", toolCalls = blocks)
+    }
+
+    private fun parseToolArgumentsForClaudeHistory(arguments: String): JSONObject = try {
+        if (arguments.isBlank()) JSONObject() else JSONObject(arguments)
+    } catch (_: Exception) {
+        JSONObject()
     }
 
     /**

@@ -13,8 +13,10 @@ data class ChatMessage(
     /**
      * 本地 function calling 回灌用字段,仅在工具调用循环内由网络层内部构造,不参与持久化。
      *
-     * - [toolCalls]:assistant 轮请求模型调用工具时的原始 tool_calls 数组(OpenAI 格式);
-     * - [toolCallId]:tool 角色消息对应的 tool_call_id,把工具结果关联回某次调用。
+     * - [toolCalls]:assistant 轮请求模型调用工具时的 provider 原始块。
+     *   OpenAI Chat Completions 下是 `tool_calls`,OpenAI Responses 下是 `function_call` input items,
+     *   Claude 下是 `tool_use` content blocks;
+     * - [toolCallId]:tool 角色消息对应的 tool id / call_id,把工具结果关联回某次调用。
      */
     val toolCalls: JSONArray? = null,
     val toolCallId: String? = null,

@@ -860,7 +860,7 @@ private fun SettingsTabContent(
             }
             item(key = "request-flags") {
                 NutTavernGroupSection {
-                    NutTavernSwitchRow(label = "流式传输", subtitle = "边生成边显示;关闭后等模型出完整回复再展示", checked = draft.streamEnabled, onCheckedChange = { onDraftChange(draft.copy(streamEnabled = it)) })
+                    NutTavernSwitchRow(label = "流式传输", subtitle = "当前客户端固定使用流式请求;此字段仅保留导入导出兼容", checked = draft.streamEnabled, onCheckedChange = { onDraftChange(draft.copy(streamEnabled = it)) })
                 }
             }
         }
