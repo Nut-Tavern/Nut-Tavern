@@ -1,5 +1,7 @@
 package com.nuttavern.network
 
+import org.json.JSONArray
+
 data class ChatMessage(
     val role: String,
     val content: String,
@@ -8,6 +10,14 @@ data class ChatMessage(
      * 文件读取 + base64 编码在 ViewModel/仓库层完成,网络层只负责按各家格式拼块。
      */
     val images: List<ChatImage> = emptyList(),
+    /**
+     * 本地 function calling 回灌用字段,仅在工具调用循环内由网络层内部构造,不参与持久化。
+     *
+     * - [toolCalls]:assistant 轮请求模型调用工具时的原始 tool_calls 数组(OpenAI 格式);
+     * - [toolCallId]:tool 角色消息对应的 tool_call_id,把工具结果关联回某次调用。
+     */
+    val toolCalls: JSONArray? = null,
+    val toolCallId: String? = null,
 )
 
 /**

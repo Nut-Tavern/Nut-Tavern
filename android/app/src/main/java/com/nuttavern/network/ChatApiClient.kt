@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -30,6 +32,7 @@ import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
 
 /**
  * 与 Provider API 交互的网络层。
@@ -37,7 +40,7 @@ import javax.net.ssl.SSLException
  * 关键设计:
  * - 入参直接吃 [Provider] / [Model],由它们的字段决定 URL / Header / 请求体;
  * - [Model.providerOverride] 优先于父 [Provider],允许"这一条模型走别的 baseUrl / key";
- * - [Model.abilities] 决定是否传思考量参数(REASONING)和后续是否传 tools 字段(TOOL,本轮不发);
+ * - [Model.abilities] 决定是否传思考量参数(REASONING)和 OpenAI 本地 function calling tools(TOOL);
  * - [Model.inputModalities] 决定后续是否能拼图片消息(本轮纯文本,留 hook);
  * - 错误信息统一走 sanitizer,避免泄露请求里的 host 完整路径。
  *
@@ -62,17 +65,25 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String? = null,
         thinkingLevel: ThinkingLevel = ThinkingLevel.Auto,
         generationParams: GenerationParams = GenerationParams.Empty,
+        tools: List<ChatTool> = emptyList(),
+        toolCallRecurseLimit: Int = 0,
     ): Flow<ChatStreamChunk> {
         val effective = effectiveProvider(provider, model)
         // thinkingLevel 是会话级思考量(ChatViewModel.currentThinkingLevel)。预设级覆盖
         // (thinkingLevelOverride)是前向 hook,当前 PromptComposer 恒传 null,故实际走会话级。
         val effectiveThinking = generationParams.thinkingLevelOverride ?: thinkingLevel
+        // 工具门控:仅模型声明 TOOL 能力且注册表非空时才参与 function calling。
+        // 当前只有 OpenAI chat completions 路径接了本地工具,其余协议忽略 tools。
+        val activeTools = if (model.abilities.contains(ModelAbility.TOOL)) tools else emptyList()
         return when (effective) {
             is Provider.OpenAI -> {
                 if (effective.useResponsesApi) {
                     streamOpenAIResponses(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
                 } else {
-                    streamOpenAI(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
+                    streamOpenAI(
+                        effective, model, messages, systemPrompt, effectiveThinking, generationParams,
+                        activeTools, toolCallRecurseLimit,
+                    )
                 }
             }
             is Provider.Google -> streamGoogle(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
@@ -182,72 +193,181 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
-    ): Flow<ChatStreamChunk> = callbackFlow {
-        val jsonBody = buildOpenAIRequest(model, messages, systemPrompt, thinkingLevel, generationParams)
+        tools: List<ChatTool>,
+        toolCallRecurseLimit: Int,
+    ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
             apiVersion = OPENAI_API_VERSION,
             endpointPath = provider.chatCompletionsPath.ifBlank { OPENAI_CHAT_COMPLETIONS_ENDPOINT },
         )
+        val toolsByName = tools.associateBy { it.name }
 
-        val request = Request.Builder()
-            .url(url)
-            .header("Authorization", "Bearer ${provider.apiKey}")
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .applyCustomHeaders(model)
-            .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        // 工具调用循环:每一轮发一次 SSE 请求。模型返回普通文本 → 结束;返回 tool_calls →
+        // 本地执行工具、把 assistant(tool_calls) 与 tool 结果追加进历史,再发下一轮。
+        // 轮数受 toolCallRecurseLimit 约束(达到上限后最后一轮不再带 tools,强制模型给文本回复)。
+        val conversation = messages.toMutableList()
+        var remainingToolRounds = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
+
+        while (true) {
+            val allowTools = remainingToolRounds > 0
+            val body = buildOpenAIRequest(
+                model, conversation, systemPrompt, thinkingLevel, generationParams,
+                if (allowTools) tools else emptyList(),
+            )
+            val request = Request.Builder()
+                .url(url)
+                .header("Authorization", "Bearer ${provider.apiKey}")
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .applyCustomHeaders(model)
+                .post(body.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            val outcome = streamOpenAIRound(request, url, forwardDeltas = true)
+            when (outcome) {
+                is OpenAIRoundResult.Failed -> {
+                    send(ChatStreamChunk(content = "", isDone = true, error = outcome.error))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.Completed -> {
+                    send(ChatStreamChunk(content = "", isDone = true))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.ToolCalls -> {
+                    // 把模型这一轮的 assistant(tool_calls) 原样追加,再逐个执行工具回灌结果。
+                    conversation.add(assistantToolCallMessage(outcome.calls))
+                    for (call in outcome.calls) {
+                        send(ChatStreamChunk(content = "", toolActivity = call.name))
+                        val result = executeToolCall(toolsByName, call)
+                        conversation.add(toolResultMessage(call.id, result))
+                    }
+                    remainingToolRounds -= 1
+                }
+            }
+        }
+    }
+
+    /** 一轮 OpenAI SSE 的结果。 */
+    private sealed interface OpenAIRoundResult {
+        /** 模型给出普通文本回复,本轮(以及整个请求)结束。 */
+        data object Completed : OpenAIRoundResult
+        /** 网络 / 解析错误。 */
+        data class Failed(val error: String) : OpenAIRoundResult
+        /** 模型要求调用工具,需本地执行后回灌再发下一轮。 */
+        data class ToolCalls(val calls: List<OpenAIToolCall>) : OpenAIRoundResult
+    }
+
+    /** 模型返回的单个 tool_call(arguments 已按流式分片拼接完成)。 */
+    private data class OpenAIToolCall(
+        val id: String,
+        val name: String,
+        val arguments: String,
+    )
+
+    /**
+     * 发起一轮 OpenAI chat completions SSE 并消费到结束。
+     *
+     * - [forwardDeltas]=true 时,content / reasoning 增量实时通过 [channelFlow] 发给上层;
+     * - 累积 tool_calls 分片(index → id/name/arguments),流结束后判定本轮结果;
+     * - 不在这里发 isDone:由调用方根据 [OpenAIRoundResult] 决定是否真正结束。
+     */
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<ChatStreamChunk>.streamOpenAIRound(
+        request: Request,
+        url: String,
+        forwardDeltas: Boolean,
+    ): OpenAIRoundResult = suspendCancellableCoroutine { continuation ->
+        val toolCallBuilders = sortedMapOf<Int, ToolCallBuilder>()
+        val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun finish(result: OpenAIRoundResult) {
+            if (resumed.compareAndSet(false, true)) continuation.resume(result)
+        }
 
         val listener = object : EventSourceListener() {
-            // 业务侧"正常完成"标记。OkHttp 在 [DONE] 之后服务端关流时会触发 onFailure(t=IOException),
-            // 这种情况不能当错误抛给 UI;用本地标记区分"业务已完成"和"真正网络/解析错误"。
-            private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 if (data == "[DONE]") {
-                    completed.set(true)
-                    trySend(ChatStreamChunk(content = "", isDone = true))
                     eventSource.cancel()
+                    finish(buildRoundResult(toolCallBuilders))
                     return
                 }
                 try {
-                    val json = JSONObject(data)
-                    val delta = json.getJSONArray("choices")
-                        .optJSONObject(0)
-                        ?.optJSONObject("delta")
-                    val content = delta?.optCleanString("content").orEmpty()
-                    val reasoningContent = parseOpenAIReasoningDelta(delta)
-                    if (content.isNotEmpty() || reasoningContent.isNotEmpty()) {
-                        trySend(ChatStreamChunk(content = content, reasoningContent = reasoningContent))
+                    val choice = JSONObject(data).getJSONArray("choices").optJSONObject(0)
+                    val delta = choice?.optJSONObject("delta")
+                    accumulateToolCallDeltas(delta, toolCallBuilders)
+                    if (forwardDeltas) {
+                        val content = delta?.optCleanString("content").orEmpty()
+                        val reasoningContent = parseOpenAIReasoningDelta(delta)
+                        if (content.isNotEmpty() || reasoningContent.isNotEmpty()) {
+                            trySend(ChatStreamChunk(content = content, reasoningContent = reasoningContent))
+                        }
                     }
                 } catch (_: Exception) {
-                    completed.set(true)
-                    trySend(ChatStreamChunk(content = "", isDone = true, error = "服务返回了无法解析的响应"))
                     eventSource.cancel()
+                    finish(OpenAIRoundResult.Failed("服务返回了无法解析的响应"))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                if (!completed.get()) {
-                    trySend(ChatStreamChunk(content = "", isDone = true))
-                }
-                close()
+                finish(buildRoundResult(toolCallBuilders))
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                if (completed.get()) {
-                    // 业务已完成,关流时的 IOException 是正常关闭,不当错误透出。
-                    close()
-                    return
-                }
-                trySend(ChatStreamChunk(content = "", isDone = true, error = buildNetworkErrorMessage(response, t, url)))
-                close()
+                if (resumed.get()) return
+                finish(OpenAIRoundResult.Failed(buildNetworkErrorMessage(response, t, url)))
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
+        continuation.invokeOnCancellation { eventSource.cancel() }
+    }
+
+    /** tool_calls 分片累积器(同一 index 的 id/name 只来一次,arguments 分多片拼接)。 */
+    private class ToolCallBuilder {
+        var id: String = ""
+        var name: String = ""
+        val arguments = StringBuilder()
+    }
+
+    /** 把一帧 delta 里的 tool_calls 分片并入累积器。 */
+    private fun accumulateToolCallDeltas(delta: JSONObject?, builders: MutableMap<Int, ToolCallBuilder>) {
+        val toolCalls = delta?.optJSONArray("tool_calls") ?: return
+        for (i in 0 until toolCalls.length()) {
+            val entry = toolCalls.optJSONObject(i) ?: continue
+            val index = entry.optInt("index", i)
+            val builder = builders.getOrPut(index) { ToolCallBuilder() }
+            entry.optString("id").takeIf { it.isNotBlank() }?.let { builder.id = it }
+            val fn = entry.optJSONObject("function")
+            fn?.optString("name")?.takeIf { it.isNotBlank() }?.let { builder.name = it }
+            fn?.optString("arguments")?.let { builder.arguments.append(it) }
+        }
+    }
+
+    /** 流结束:有 tool_calls 走工具分支,否则视为普通文本完成。 */
+    private fun buildRoundResult(builders: Map<Int, ToolCallBuilder>): OpenAIRoundResult {
+        val calls = builders.values
+            .filter { it.name.isNotBlank() }
+            .map { OpenAIToolCall(id = it.id, name = it.name, arguments = it.arguments.toString()) }
+        return if (calls.isEmpty()) OpenAIRoundResult.Completed else OpenAIRoundResult.ToolCalls(calls)
+    }
+
+    /** 执行单个工具调用,失败时返回错误 JSON 回灌给模型(让模型自己决定如何处理)。 */
+    private suspend fun executeToolCall(
+        toolsByName: Map<String, ChatTool>,
+        call: OpenAIToolCall,
+    ): String {
+        val tool = toolsByName[call.name]
+            ?: return JSONObject().put("error", "unknown tool: ${call.name}").toString()
+        val arguments = try {
+            if (call.arguments.isBlank()) JSONObject() else JSONObject(call.arguments)
+        } catch (_: Exception) {
+            JSONObject()
+        }
+        return try {
+            tool.execute(arguments)
+        } catch (e: Exception) {
+            JSONObject().put("error", e.message ?: "tool execution failed").toString()
+        }
     }
 
     // ── OpenAI Responses API SSE ──────────────────────
@@ -535,6 +655,7 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
+        tools: List<ChatTool> = emptyList(),
     ): String {
         val jsonMessages = JSONArray()
         systemPrompt?.takeIf { it.isNotBlank() }?.let {
@@ -543,25 +664,46 @@ class ChatApiClient @Inject constructor() {
         messages.forEach { msg ->
             val role = normalizeOpenAIRole(msg.role)
             if (role.isBlank()) return@forEach
-            if (msg.images.isEmpty()) {
-                if (msg.content.isNotBlank()) {
-                    jsonMessages.put(JSONObject().put("role", role).put("content", msg.content))
-                }
-            } else {
-                // 带图消息:content 用 parts 数组,文本块 + 每张图一个 image_url(data URL)。
-                val parts = JSONArray()
-                if (msg.content.isNotBlank()) {
-                    parts.put(JSONObject().put("type", "text").put("text", msg.content))
-                }
-                msg.images.forEach { image ->
-                    parts.put(
+            when {
+                // tool 结果消息:OpenAI 要求 role=tool + tool_call_id + content。
+                role == "tool" && msg.toolCallId != null -> {
+                    jsonMessages.put(
                         JSONObject()
-                            .put("type", "image_url")
-                            .put("image_url", JSONObject().put("url", image.toDataUrl())),
+                            .put("role", "tool")
+                            .put("tool_call_id", msg.toolCallId)
+                            .put("content", msg.content),
                     )
                 }
-                if (parts.length() > 0) {
-                    jsonMessages.put(JSONObject().put("role", role).put("content", parts))
+                // assistant 发起工具调用:content 可为空,但必须带 tool_calls 数组。
+                role == "assistant" && msg.toolCalls != null -> {
+                    jsonMessages.put(
+                        JSONObject()
+                            .put("role", "assistant")
+                            .put("content", msg.content.ifBlank { JSONObject.NULL })
+                            .put("tool_calls", msg.toolCalls),
+                    )
+                }
+                msg.images.isEmpty() -> {
+                    if (msg.content.isNotBlank()) {
+                        jsonMessages.put(JSONObject().put("role", role).put("content", msg.content))
+                    }
+                }
+                else -> {
+                    // 带图消息:content 用 parts 数组,文本块 + 每张图一个 image_url(data URL)。
+                    val parts = JSONArray()
+                    if (msg.content.isNotBlank()) {
+                        parts.put(JSONObject().put("type", "text").put("text", msg.content))
+                    }
+                    msg.images.forEach { image ->
+                        parts.put(
+                            JSONObject()
+                                .put("type", "image_url")
+                                .put("image_url", JSONObject().put("url", image.toDataUrl())),
+                        )
+                    }
+                    if (parts.length() > 0) {
+                        jsonMessages.put(JSONObject().put("role", role).put("content", parts))
+                    }
                 }
             }
         }
@@ -580,9 +722,55 @@ class ChatApiClient @Inject constructor() {
                 request.put("reasoning_effort", it)
             }
         }
+        if (tools.isNotEmpty()) {
+            request.put("tools", buildOpenAIToolsArray(tools))
+        }
         applyCustomBodies(request, model.customBodies)
         return request.toString()
     }
+
+    /** 把内置工具列表转成 OpenAI `tools` 数组(每个 = {type:function, function:{name,description,parameters}})。 */
+    private fun buildOpenAIToolsArray(tools: List<ChatTool>): JSONArray {
+        val array = JSONArray()
+        tools.forEach { tool ->
+            array.put(
+                JSONObject()
+                    .put("type", "function")
+                    .put(
+                        "function",
+                        JSONObject()
+                            .put("name", tool.name)
+                            .put("description", tool.description)
+                            .put("parameters", tool.parametersSchema),
+                    ),
+            )
+        }
+        return array
+    }
+
+    /** 构造一条携带 tool_calls 的 assistant 消息(回灌循环内部用,不持久化)。 */
+    private fun assistantToolCallMessage(calls: List<OpenAIToolCall>): ChatMessage {
+        val toolCalls = JSONArray()
+        calls.forEach { call ->
+            toolCalls.put(
+                JSONObject()
+                    .put("id", call.id)
+                    .put("type", "function")
+                    .put(
+                        "function",
+                        JSONObject()
+                            .put("name", call.name)
+                            .put("arguments", call.arguments),
+                    ),
+            )
+        }
+        return ChatMessage(role = "assistant", content = "", toolCalls = toolCalls)
+    }
+
+    /** 构造一条 tool 结果消息(回灌循环内部用,不持久化)。 */
+    private fun toolResultMessage(toolCallId: String, result: String): ChatMessage =
+        ChatMessage(role = "tool", content = result, toolCallId = toolCallId)
+
 
     /**
      * 把生成参数应用到 OpenAI chat completions 请求体。

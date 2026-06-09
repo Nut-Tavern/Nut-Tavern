@@ -90,6 +90,8 @@ class ChatViewModel @Inject constructor(
     private val promptComposer: PromptComposer,
     private val regexEngine: RegexEngine,
     private val chatApiClient: ChatApiClient,
+    private val chatToolRegistry: com.nuttavern.network.ChatToolRegistry,
+    private val toolsSettingsRepository: com.nuttavern.data.tools.ToolsSettingsRepository,
 ) : ViewModel() {
 
     private val _conversationList = MutableStateFlow<List<ConversationSummary>>(emptyList())
@@ -591,6 +593,7 @@ class ChatViewModel @Inject constructor(
                 _streamingReasoningDurationMillis.value = 0L
                 streamingReasoningStartedAtMillis = null
                 streamingReasoningEndedAtMillis = null
+                val toolsSettings = toolsSettingsRepository.settings.first()
 
                 chatApiClient.streamChat(
                     provider = provider,
@@ -599,6 +602,8 @@ class ChatViewModel @Inject constructor(
                     systemPrompt = prepared.systemPrompt,
                     thinkingLevel = _currentThinkingLevel.value,
                     generationParams = prepared.generationParams,
+                    tools = chatToolRegistry.tools,
+                    toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
                 ).collect { chunk ->
                     when {
                         chunk.error != null -> {
@@ -1433,6 +1438,7 @@ class ChatViewModel @Inject constructor(
         _streamingReasoningDurationMillis.value = 0L
         streamingReasoningStartedAtMillis = null
         streamingReasoningEndedAtMillis = null
+        val toolsSettings = toolsSettingsRepository.settings.first()
 
         chatApiClient.streamChat(
             provider = provider,
@@ -1441,6 +1447,8 @@ class ChatViewModel @Inject constructor(
             systemPrompt = prepared.systemPrompt,
             thinkingLevel = _currentThinkingLevel.value,
             generationParams = prepared.generationParams,
+            tools = chatToolRegistry.tools,
+            toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
         ).collect { chunk ->
             when {
                 chunk.error != null -> {
