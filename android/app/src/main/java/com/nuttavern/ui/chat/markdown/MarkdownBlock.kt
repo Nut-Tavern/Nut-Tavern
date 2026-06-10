@@ -105,7 +105,7 @@ internal fun RenderMarkdownBlock(
             color = MaterialTheme.colorScheme.outlineVariant,
         )
 
-        MarkdownElementTypes.HTML_BLOCK -> RenderHtmlBlockFallback(node, rawText, modifier)
+        MarkdownElementTypes.HTML_BLOCK -> RenderHtmlBlockFallback(node, rawText, color, modifier)
 
         MarkdownElementTypes.LINK_DEFINITION,
         MarkdownTokenTypes.EOL,
@@ -638,28 +638,27 @@ private fun padCells(
     return cells + List(columnCount - cells.size) { empty }
 }
 
+/**
+ * 块级 HTML(HTML_BLOCK):本仓库不渲染真实 HTML。
+ * - 纯注释块 `<!-- -->` → 隐藏(剥离后为空,直接跳过);
+ * - 其余块(`<div>` `<details>` 等)→ 剥掉标签 / 转换行 / 解码实体后按正文渲染,
+ *   不再丢进代码块样式里展示标签字面量。
+ */
 @Composable
 private fun RenderHtmlBlockFallback(
     node: ASTNode,
     rawText: String,
+    color: Color,
     modifier: Modifier,
 ) {
-    val text = node.textIn(rawText).trim()
+    val text = MarkdownHtml.stripBlockHtml(node.textIn(rawText))
     if (text.isEmpty()) return
-    Surface(
+    Text(
+        text = text,
         modifier = modifier.fillMaxWidth(),
-        color = codeBlockBackground(),
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Text(
-            text = text,
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(MarkdownTokens.CodeBlockPadding),
-            style = codeBlockTextStyle(),
-            color = MaterialTheme.colorScheme.onSurface,
-        )
-    }
+        style = paragraphStyle(),
+        color = color,
+    )
 }
 
 @Composable

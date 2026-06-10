@@ -133,6 +133,8 @@ private fun AnnotatedString.Builder.appendInline(
 
         MarkdownTokenTypes.EOL -> append(' ')
 
+        MarkdownTokenTypes.HTML_TAG -> appendInlineHtmlTag(node, rawText)
+
         MarkdownElementTypes.FULL_REFERENCE_LINK,
         MarkdownElementTypes.SHORT_REFERENCE_LINK -> {
             // 引用式链接没有内嵌 destination,本轮不做查表,直接渲染原始文字。
@@ -147,14 +149,29 @@ private fun AnnotatedString.Builder.appendInline(
         }
 
         else -> {
-            // 兜底:纯文本 token / 未识别类型 → 直接 append 原始片段。
+            // 兜底:纯文本 token / 未识别类型 → 直接 append 原始片段(解码 HTML 实体)。
             // 流式中间态出现的"半截"节点都走这里,保证不丢字。
             if (node.children.isEmpty()) {
-                append(node.textIn(rawText))
+                append(MarkdownHtml.decodeEntities(node.textIn(rawText)))
             } else {
                 node.children.forEach { child -> appendInline(child, rawText, ctx) }
             }
         }
+    }
+}
+
+/**
+ * 行内 HTML 标签(HTML_TAG token):
+ * - 注释 `<!-- -->` → 隐藏(不 append);
+ * - 换行 `<br>` / `<br/>` → 换行;
+ * - 其余标签(`<i>` `<span>` 等)→ 剥掉标签本身,不显示字面量(被包裹文字是相邻独立 token,照常渲染)。
+ */
+private fun AnnotatedString.Builder.appendInlineHtmlTag(node: ASTNode, rawText: String) {
+    val tag = node.textIn(rawText)
+    when {
+        MarkdownHtml.isComment(tag) -> Unit
+        MarkdownHtml.isLineBreak(tag) -> append('\n')
+        else -> Unit
     }
 }
 

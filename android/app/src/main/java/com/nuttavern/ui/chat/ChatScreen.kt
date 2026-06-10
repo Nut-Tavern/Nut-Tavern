@@ -112,8 +112,7 @@ fun ChatScreen(
     var showToolPicker by remember { mutableStateOf(false) }
     var editContent by remember { mutableStateOf("") }
 
-    val shouldShowStreaming = streamingConversationId == currentId &&
-        (streamingContent.isNotBlank() || streamingReasoningContent.isNotBlank())
+    val shouldShowStreaming = streamingConversationId == currentId && isReplying
     // Composer 底部留白:无论键盘是否抬起,都保留与无键盘场景相同的间距,
     // 避免输入栏紧贴键盘顶部产生的局促感。
     val composerBottomPadding = NutTavernComposerTokens.RestingBottomPadding
@@ -509,31 +508,6 @@ private fun ChatScreenContent(
             // 不使用自定义 contentWindowInsets:Scaffold 默认的 systemBars 会被 bottomBar 抵消;
             // safeDrawing 会重复消费 IME,与 bottomBar 路径冲突,导致键盘高度被叠两次。
             Column {
-                if (currentToolActivity != null) {
-                    androidx.compose.material3.Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    ) {
-                        androidx.compose.foundation.layout.Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp),
-                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            androidx.compose.material3.CircularProgressIndicator(
-                                modifier = Modifier.size(14.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                text = "正在调用工具: $currentToolActivity...",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
                 ChatComposer(
                     draft = draft,
                     isReplying = isReplying,
@@ -560,6 +534,7 @@ private fun ChatScreenContent(
             streamingContent = streamingContent,
             streamingReasoningContent = streamingReasoningContent,
             streamingReasoningDurationMillis = streamingReasoningDurationMillis,
+            currentToolActivity = currentToolActivity,
             shouldShowStreaming = shouldShowStreaming,
             conversationId = currentConversationId,
             innerPadding = innerPadding,

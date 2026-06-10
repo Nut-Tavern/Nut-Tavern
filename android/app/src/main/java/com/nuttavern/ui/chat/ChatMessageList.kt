@@ -98,6 +98,7 @@ internal fun ChatMessageList(
     streamingContent: String,
     streamingReasoningContent: String,
     streamingReasoningDurationMillis: Long,
+    currentToolActivity: String?,
     shouldShowStreaming: Boolean,
     conversationId: String,
     innerPadding: PaddingValues,
@@ -127,6 +128,7 @@ internal fun ChatMessageList(
             streamingContent = streamingContent,
             streamingReasoningContent = streamingReasoningContent,
             streamingReasoningDurationMillis = streamingReasoningDurationMillis,
+            currentToolActivity = currentToolActivity,
             shouldShowStreaming = shouldShowStreaming,
             innerPadding = innerPadding,
             onCopyMessage = onCopyMessage,
@@ -144,6 +146,7 @@ private fun ChatMessageListContent(
     streamingContent: String,
     streamingReasoningContent: String,
     streamingReasoningDurationMillis: Long,
+    currentToolActivity: String?,
     shouldShowStreaming: Boolean,
     innerPadding: PaddingValues,
     onCopyMessage: (Message) -> Unit,
@@ -237,6 +240,7 @@ private fun ChatMessageListContent(
                         content = streamingContent,
                         reasoningContent = streamingReasoningContent,
                         reasoningDurationMillis = streamingReasoningDurationMillis,
+                        currentToolActivity = currentToolActivity,
                     )
                 }
             }
