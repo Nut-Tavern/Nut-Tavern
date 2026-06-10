@@ -198,12 +198,11 @@ fun ChatScreen(
                             globalRegexScripts = globalRegexScripts,
                             regexCounts = regexCounts,
                             lorebookCounts = lorebookCounts,
-                            toolModeSubtitle = when (currentToolMode) {
-                                com.nuttavern.data.tools.ConversationToolMode.FORCE_ON -> "本会话强制启用"
-                                com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF -> "本会话强制关闭"
-                                com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL ->
-                                    if (localToolsSettings.defaultEnabled) "跟随全局:启用" else "跟随全局:关闭"
-                            },
+                            toolModeSubtitle = toolModeSubtitle(
+                                currentConversationId = currentId,
+                                currentMode = currentToolMode,
+                                newConversationDefaultEnabled = localToolsSettings.defaultEnabled,
+                            ),
                             onOpenUnavailableFeature = { featureName ->
                                 pendingSidebarFeatureNotice = featureName
                             },
@@ -342,7 +341,6 @@ fun ChatScreen(
     ToolModePickerSheet(
         visible = showToolModePicker,
         currentMode = currentToolMode,
-        globalDefaultEnabled = localToolsSettings.defaultEnabled,
         onSelect = { mode ->
             viewModel.selectToolMode(mode)
             showToolModePicker = false
@@ -437,6 +435,20 @@ fun ChatScreen(
             },
             onDismiss = { showCharacterPicker = false },
         )
+    }
+}
+
+private fun toolModeSubtitle(
+    currentConversationId: String,
+    currentMode: com.nuttavern.data.tools.ConversationToolMode,
+    newConversationDefaultEnabled: Boolean,
+): String {
+    if (currentConversationId.isBlank()) {
+        return if (newConversationDefaultEnabled) "新会话默认启用" else "新会话默认关闭"
+    }
+    return when (currentMode) {
+        com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF -> "本会话关闭"
+        else -> "本会话启用"
     }
 }
 

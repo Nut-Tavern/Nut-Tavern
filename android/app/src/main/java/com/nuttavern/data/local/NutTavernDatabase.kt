@@ -281,7 +281,7 @@ abstract class NutTavernDatabase : RoomDatabase() {
         /**
          * 会话加 toolMode 字段:内置工具开关模式(follow_global / force_on / force_off)。
          *
-         * 老会话默认 'follow_global' = 跟随全局默认开关,与升级前"工具全局生效"行为对齐。
+         * 老会话默认 'follow_global' 是旧版兼容值;当前运行时按启用处理,新会话会写入明确开/关。
          */
         val MIGRATION_17_18 = object : Migration(17, 18) {
             override fun migrate(db: SupportSQLiteDatabase) {

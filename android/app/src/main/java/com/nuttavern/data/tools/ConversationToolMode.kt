@@ -3,12 +3,12 @@ package com.nuttavern.data.tools
 /**
  * 会话级内置工具开关模式。
  *
- * - [FOLLOW_GLOBAL]:跟随全局默认开关 [LocalToolsSettings.defaultEnabled];
- * - [FORCE_ON]:本会话强制启用工具(忽略全局默认);
- * - [FORCE_OFF]:本会话强制关闭工具(忽略全局默认)。
+ * - [FOLLOW_GLOBAL]:旧版存储值,表示会话创建时未固化开关;新会话不再写入这个值;
+ * - [FORCE_ON]:本会话启用工具;
+ * - [FORCE_OFF]:本会话关闭工具。
  *
  * 持久化用 [storageValue] 字符串落库([com.nuttavern.data.local.entity.ConversationEntity.toolMode]),
- * 解析失败兜底 [FOLLOW_GLOBAL]。
+ * 解析失败兜底 [FOLLOW_GLOBAL],运行时按旧会话兼容启用处理。
  */
 enum class ConversationToolMode(val storageValue: String) {
     FOLLOW_GLOBAL("follow_global"),
@@ -23,13 +23,13 @@ enum class ConversationToolMode(val storageValue: String) {
 }
 
 /**
- * 结合全局默认与会话模式,判定当前会话是否应携带内置工具。
+ * 判定当前会话是否应携带内置工具。
  *
- * @param mode 会话模式
- * @param globalDefaultEnabled 全局默认开关
+ * [FOLLOW_GLOBAL] 只作为旧数据兼容:旧版默认开关为启用,因此这里按启用处理。新会话创建时会根据
+ * [LocalToolsSettings.defaultEnabled] 写入 [FORCE_ON] 或 [FORCE_OFF],之后不再动态跟随全局开关。
  */
-fun ConversationToolMode.resolveToolsEnabled(globalDefaultEnabled: Boolean): Boolean = when (this) {
-    ConversationToolMode.FOLLOW_GLOBAL -> globalDefaultEnabled
+fun ConversationToolMode.resolveToolsEnabled(): Boolean = when (this) {
+    ConversationToolMode.FOLLOW_GLOBAL -> true
     ConversationToolMode.FORCE_ON -> true
     ConversationToolMode.FORCE_OFF -> false
 }

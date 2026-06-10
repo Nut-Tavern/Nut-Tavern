@@ -18,28 +18,22 @@ import com.nuttavern.ui.components.NutTavernSelectableRow
 import com.nuttavern.ui.components.NutTavernSheetTitle
 
 /**
- * 右侧栏"内置工具"会话级开关三态选择。
+ * 右侧栏"内置工具"会话级开关选择。
  *
- * 点选即应用并关闭:跟随全局 / 本会话强制开启 / 本会话强制关闭。"跟随全局"行副标题动态展示
- * 当前全局默认开关状态,让用户清楚跟随后的实际效果。
+ * 点选即应用并关闭:本会话启用 / 本会话关闭。新会话默认值只在创建会话时固化,这里不再提供
+ * "跟随全局"选项。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ToolModePickerSheet(
     visible: Boolean,
     currentMode: ConversationToolMode,
-    globalDefaultEnabled: Boolean,
     onSelect: (ConversationToolMode) -> Unit,
     onDismiss: () -> Unit,
 ) {
     if (!visible) return
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val followSubtitle = if (globalDefaultEnabled) {
-        "当前全局默认:启用"
-    } else {
-        "当前全局默认:关闭"
-    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -63,24 +57,16 @@ fun ToolModePickerSheet(
             ) {
                 item {
                     NutTavernSelectableRow(
-                        title = "跟随全局默认",
-                        subtitle = followSubtitle,
-                        selected = currentMode == ConversationToolMode.FOLLOW_GLOBAL,
-                        onClick = { onSelect(ConversationToolMode.FOLLOW_GLOBAL) },
-                    )
-                }
-                item {
-                    NutTavernSelectableRow(
-                        title = "本会话强制启用",
-                        subtitle = "无视全局默认，这个会话始终允许调用工具",
-                        selected = currentMode == ConversationToolMode.FORCE_ON,
+                        title = "本会话启用工具",
+                        subtitle = "允许模型在这个会话里调用已启用的内置工具",
+                        selected = currentMode != ConversationToolMode.FORCE_OFF,
                         onClick = { onSelect(ConversationToolMode.FORCE_ON) },
                     )
                 }
                 item {
                     NutTavernSelectableRow(
-                        title = "本会话强制关闭",
-                        subtitle = "无视全局默认，这个会话始终不调用工具",
+                        title = "本会话关闭工具",
+                        subtitle = "这个会话不向模型下发任何内置工具",
                         selected = currentMode == ConversationToolMode.FORCE_OFF,
                         onClick = { onSelect(ConversationToolMode.FORCE_OFF) },
                     )

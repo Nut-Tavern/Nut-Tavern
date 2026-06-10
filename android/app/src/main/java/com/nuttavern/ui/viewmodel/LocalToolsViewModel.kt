@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 /**
  * 内置工具设置 ViewModel。
  *
- * 管理 [LocalToolsSettings](全局默认开关 / 人工确认 / 各工具启用集),并暴露注册表里的工具定义
+ * 管理 [LocalToolsSettings](新会话默认总开关 / 各工具默认启用 / 各工具确认),并暴露注册表里的工具定义
  * 供设置页枚举。与 [ToolsViewModel](工具调用引擎高级设置)分开,单文件单职责。
  */
 @HiltViewModel
@@ -40,12 +40,6 @@ class LocalToolsViewModel @Inject constructor(
         }
     }
 
-    fun setRequireApproval(required: Boolean) {
-        viewModelScope.launch {
-            repository.update { it.copy(requireApproval = required) }
-        }
-    }
-
     fun setToolEnabled(toolId: String, enabled: Boolean) {
         viewModelScope.launch {
             repository.update { current ->
@@ -55,6 +49,19 @@ class LocalToolsViewModel @Inject constructor(
                     current.enabledToolIds - toolId
                 }
                 current.copy(enabledToolIds = next)
+            }
+        }
+    }
+
+    fun setToolApprovalRequired(toolId: String, required: Boolean) {
+        viewModelScope.launch {
+            repository.update { current ->
+                val next = if (required) {
+                    current.approvalRequiredToolIds + toolId
+                } else {
+                    current.approvalRequiredToolIds - toolId
+                }
+                current.copy(approvalRequiredToolIds = next)
             }
         }
     }

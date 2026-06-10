@@ -154,7 +154,7 @@ internal fun DeleteConversationDialog(
 /**
  * 模型调用内置工具前的人工确认弹窗。
  *
- * 仅在"执行前需人工确认"开启时弹出。点外部不可关闭(onDismissRequest 等同拒绝),
+ * 仅在对应工具开启"调用前确认"或工具自身标记高风险时弹出。点外部不可关闭(onDismissRequest 等同拒绝),
  * 避免误触把挂起的工具调用悬空。允许=放行本次调用,拒绝=回灌错误让模型转向用户解释。
  */
 @Composable
@@ -198,4 +198,3 @@ internal fun ToolApprovalDialog(
         },
     )
 }
-

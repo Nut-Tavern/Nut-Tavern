@@ -138,15 +138,13 @@ class ChatViewModel @Inject constructor(
     private val _currentThinkingLevel = MutableStateFlow<ThinkingLevel>(ThinkingLevel.Default)
     val currentThinkingLevel: StateFlow<ThinkingLevel> = _currentThinkingLevel.asStateFlow()
 
-    /**
-     * 当前会话的内置工具开关模式(跟随全局 / 强制开 / 强制关)。会话级,与 [currentThinkingLevel] 同模式。
-     */
+    /** 当前会话的内置工具总开关。会话级,新会话创建时由全局默认固化,之后不再动态跟随全局开关。 */
     private val _currentToolMode =
         MutableStateFlow(com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL)
     val currentToolMode: StateFlow<com.nuttavern.data.tools.ConversationToolMode> =
         _currentToolMode.asStateFlow()
 
-    /** 内置工具全局配置(全局默认开关 / 人工确认 / 各工具启用集),供右侧栏与设置页展示。 */
+    /** 内置工具配置(新会话默认总开关 / 各工具默认启用 / 各工具确认),供右侧栏与设置页展示。 */
     val localToolsSettings: StateFlow<com.nuttavern.data.tools.LocalToolsSettings> =
         localToolsRepository.settings.stateIn(
             viewModelScope,
@@ -647,7 +645,7 @@ class ChatViewModel @Inject constructor(
                     generationParams = prepared.generationParams,
                     tools = activeTools,
                     toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
-                    requireToolApproval = localToolsConfig.requireApproval,
+                    requireToolApproval = false,
                     approveToolCall = buildToolApprover(),
                 ).collect { chunk ->
                     when {
@@ -739,6 +737,8 @@ class ChatViewModel @Inject constructor(
         _currentMessages.value = emptyList()
         _draft.value = ""
         _currentThinkingLevel.value = ThinkingLevel.Default
+        // 新会话占位态先保留旧存储值作为"待创建时读取最新默认"的内部哨兵。
+        // 真正落库在 ensureCurrentConversation,会读取 LocalToolsRepository 最新值并固化为 FORCE_ON / FORCE_OFF。
         _currentToolMode.value = com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL
         viewModelScope.launch {
             _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
@@ -971,21 +971,33 @@ class ChatViewModel @Inject constructor(
 
     /**
      * 本次发送实际要带的内置工具。三重门控:
-     * 1. 会话 toolMode 结合全局默认开关 → 决定本会话是否启用工具;
-     * 2. 全局 enabledToolIds → 只下发被勾选的工具;
-     * 3. 注册表里存在的工具定义。
+     * 1. 会话 toolMode → 决定本会话是否启用工具;
+     * 2. settings.enabledToolIds → 只下发被勾选为"新会话默认启用"的工具;
+     * 3. settings.approvalRequiredToolIds → 合并到 [ChatTool.needsApproval],实现每工具确认;
+     * 4. 注册表里存在的工具定义。
      */
     private fun resolveActiveTools(
         settings: com.nuttavern.data.tools.LocalToolsSettings,
     ): List<com.nuttavern.network.ChatTool> {
-        val enabledForConversation =
-            _currentToolMode.value.resolveToolsEnabled(settings.defaultEnabled)
+        val enabledForConversation = _currentToolMode.value.resolveToolsEnabled()
         if (!enabledForConversation) return emptyList()
-        return chatToolRegistry.tools.filter { it.id in settings.enabledToolIds }
+        return chatToolRegistry.tools
+            .filter { settings.isToolEnabledByDefault(it.id) }
+            .map { tool ->
+                tool.copy(needsApproval = settings.isApprovalRequiredForTool(tool.id))
+            }
+    }
+
+    private fun defaultToolModeForNewConversation(defaultEnabled: Boolean): com.nuttavern.data.tools.ConversationToolMode {
+        return if (defaultEnabled) {
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_ON
+        } else {
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF
+        }
     }
 
     /**
-     * 构造人工确认回调。是否真正拦截由网络层按"全局 requireApproval 或工具自身 needsApproval"决定;
+     * 构造人工确认回调。是否真正拦截由网络层按工具自身 needsApproval 决定;
      * 这里只负责把待确认信息抛给 UI、挂起等待用户点按。始终返回非空,保证高风险工具即使全局确认
      * 关闭也能被拦截。
      */
@@ -1163,6 +1175,10 @@ class ChatViewModel @Inject constructor(
         val enabledOrphanRegexIds = snapshotEnabledOrphanRegexIdsJson()
         val newConversationId = "conv-${System.currentTimeMillis()}"
         val titleSeed = character?.name?.takeIf { it.isNotBlank() } ?: firstMessage
+        val localToolsConfig = localToolsRepository.settings.first()
+        val toolMode = _currentToolMode.value.takeUnless {
+            it == com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL
+        } ?: defaultToolModeForNewConversation(localToolsConfig.defaultEnabled)
         val conversation = ConversationSummary(
             id = newConversationId,
             title = titleSeed.take(20),
@@ -1175,7 +1191,7 @@ class ChatViewModel @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             thinkingLevel = thinkingLevel,
-            toolMode = _currentToolMode.value,
+            toolMode = toolMode,
         )
 
         conversationRepository.createConversation(conversation, createdAt)
@@ -1185,6 +1201,7 @@ class ChatViewModel @Inject constructor(
         _currentPersonaId.value = personaId
         _currentPresetId.value = presetId
         _currentThinkingLevel.value = thinkingLevel
+        _currentToolMode.value = toolMode
         _currentMessages.value = emptyList()
 
         // 角色绑定时插入 greeting 作为新会话的首条 assistant 消息(对齐酒馆 first_mes 行为)。
@@ -1579,7 +1596,7 @@ class ChatViewModel @Inject constructor(
             generationParams = prepared.generationParams,
             tools = activeTools,
             toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
-            requireToolApproval = localToolsConfig.requireApproval,
+            requireToolApproval = false,
             approveToolCall = buildToolApprover(),
         ).collect { chunk ->
             when {

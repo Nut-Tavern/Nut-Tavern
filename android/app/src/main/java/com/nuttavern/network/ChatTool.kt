@@ -17,8 +17,8 @@ import org.json.JSONObject
  * @property displayName 设置页 / 确认弹窗展示用的中文名。
  * @property description 工具用途说明,模型据此决定是否调用。
  * @property parametersSchema JSON Schema(object 类型)。无参数工具传 `{"type":"object","properties":{}}`。
- * @property needsApproval 该工具是否默认建议人工确认(有副作用的工具置 true)。实际是否拦截由
- *   全局「执行前需人工确认」开关决定,这里只是工具自身的风险标注。
+ * @property needsApproval 该工具本次调用是否需要人工确认。注册表里的值只是默认建议;发送链路会按
+ *   用户在内置工具页的"调用前确认"设置复制出本次实际值。
  * @property execute 执行体。入参是模型给出的实参(解析后的 JSON,无参数时为空对象),返回纯文本结果。
  */
 data class ChatTool(

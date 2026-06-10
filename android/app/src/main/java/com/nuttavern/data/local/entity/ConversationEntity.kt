@@ -65,13 +65,13 @@ data class ConversationEntity(
      */
     @ColumnInfo(defaultValue = "NULL") val thinkingLevel: String? = null,
     /**
-     * 当前会话的内置工具开关模式。三态:
-     * - `follow_global`:跟随全局默认开关([com.nuttavern.data.tools.LocalToolsSettings.defaultEnabled]);
-     * - `force_on`:本会话强制启用工具;
-     * - `force_off`:本会话强制关闭工具。
+     * 当前会话的内置工具总开关:
+     * - `force_on`:本会话启用工具;
+     * - `force_off`:本会话关闭工具;
+     * - `follow_global`:旧版兼容值,运行时按启用处理,新会话不再写入。
      *
-     * 存 [com.nuttavern.data.tools.ConversationToolMode] 的序列化值。新会话与老会话迁移上来都默认
-     * `follow_global`,语义稳定:全局默认变了,跟随态的会话也跟着变,强制态的不受影响。
+     * 存 [com.nuttavern.data.tools.ConversationToolMode] 的序列化值。新会话会按当前默认写入明确开/关;
+     * 老会话迁移上来的 `follow_global` 仅为兼容旧数据。
      */
     @ColumnInfo(defaultValue = "'follow_global'") val toolMode: String = "follow_global",
 )
