@@ -250,13 +250,14 @@ class ChatApiClient @Inject constructor() {
                     conversation.add(assistantToolCallMessage(outcome.calls))
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = if (remainingToolCalls > 0) {
+                        val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
                             executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
                         } else {
-                            toolCallLimitExceededResult()
+                            ToolExecutionResult(toolCallLimitExceededResult())
                         }
-                        conversation.add(toolResultMessage(call.id, result))
+                        conversation.add(toolResultMessage(call.id, executionResult.resultJson))
+                        send(ChatStreamChunk(content = "", toolCall = call.toRecord(executionResult)))
                     }
                 }
             }
@@ -279,6 +280,16 @@ class ChatApiClient @Inject constructor() {
         val name: String,
         val arguments: String,
     )
+
+    /** 把工具调用 + 执行结果组装成可落库 / 渲染的 [ToolCallRecord]。 */
+    private fun LocalToolCall.toRecord(execution: ToolExecutionResult): ToolCallRecord =
+        ToolCallRecord(
+            id = id,
+            name = name,
+            arguments = arguments,
+            result = execution.resultJson,
+            denied = execution.denied,
+        )
 
     /**
      * 发起一轮 OpenAI chat completions SSE 并消费到结束。
@@ -423,9 +434,9 @@ class ChatApiClient @Inject constructor() {
         call: LocalToolCall,
         requireApproval: Boolean,
         approveToolCall: ToolCallApprover?,
-    ): String {
+    ): ToolExecutionResult {
         val tool = toolsByName[call.name]
-            ?: return JSONObject().put("error", "unknown tool: ${call.name}").toString()
+            ?: return ToolExecutionResult(JSONObject().put("error", "unknown tool: ${call.name}").toString())
         // 实参必须是合法 JSON 对象。非法时不执行工具,回灌结构化错误让模型自我修正,而不是
         // 退化成空对象继续执行(对有参/有副作用的工具会造成"参数坏了也执行")。
         val arguments = when {
@@ -433,29 +444,42 @@ class ChatApiClient @Inject constructor() {
             else -> try {
                 JSONObject(call.arguments)
             } catch (_: Exception) {
-                return JSONObject().put("error", "invalid tool arguments: not a valid JSON object").toString()
+                return ToolExecutionResult(
+                    JSONObject().put("error", "invalid tool arguments: not a valid JSON object").toString()
+                )
             }
         }
         // 是否拦截 = 全局开关 或 工具自身标注需要确认。任一为真都要人工确认,
         // 避免高风险工具在全局确认关闭时被自动执行。
         val approvalRequired = requireApproval || tool.needsApproval
         if (approvalRequired && approveToolCall == null) {
-            return JSONObject().put("error", "tool approval required but no approver is available").toString()
+            return ToolExecutionResult(
+                JSONObject().put("error", "tool approval required but no approver is available").toString()
+            )
         }
         if (approvalRequired && approveToolCall != null) {
             val approved = approveToolCall.invoke(tool.displayName, tool.name, arguments.toString())
             if (!approved) {
-                return JSONObject().put("error", "用户拒绝了本次工具调用").toString()
+                return ToolExecutionResult(
+                    JSONObject().put("error", "用户拒绝了本次工具调用").toString(),
+                    denied = true,
+                )
             }
         }
         return try {
-            tool.execute(arguments)
+            ToolExecutionResult(tool.execute(arguments))
         } catch (e: Exception) {
             // 详细异常只进本地日志,回灌给模型的是稳定低敏文案,避免泄露本地路径 / 实现细节。
             android.util.Log.w("ChatApiClient", "tool execution failed: ${tool.name}", e)
-            JSONObject().put("error", "tool execution failed").toString()
+            ToolExecutionResult(JSONObject().put("error", "tool execution failed").toString())
         }
     }
+
+    /** 工具执行结果。[resultJson] 回灌给模型,[denied] 标记是否被用户拒绝(用于落库 ToolCall part)。 */
+    private data class ToolExecutionResult(
+        val resultJson: String,
+        val denied: Boolean = false,
+    )
 
     private fun toolCallLimitExceededResult(): String =
         JSONObject().put("error", "tool call limit exceeded for this response").toString()
@@ -527,13 +551,14 @@ class ChatApiClient @Inject constructor() {
                     conversation.addAll(openAIResponsesToolInputMessages(outcome.calls))
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = if (remainingToolCalls > 0) {
+                        val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
                             executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
                         } else {
-                            toolCallLimitExceededResult()
+                            ToolExecutionResult(toolCallLimitExceededResult())
                         }
-                        conversation.add(openAIResponsesToolResultMessage(call.id, result))
+                        conversation.add(openAIResponsesToolResultMessage(call.id, executionResult.resultJson))
+                        send(ChatStreamChunk(content = "", toolCall = call.toRecord(executionResult)))
                     }
                 }
             }
@@ -720,13 +745,14 @@ class ChatApiClient @Inject constructor() {
                     val toolResults = mutableListOf<Pair<String, String>>()
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = if (remainingToolCalls > 0) {
+                        val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
                             executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
                         } else {
-                            toolCallLimitExceededResult()
+                            ToolExecutionResult(toolCallLimitExceededResult())
                         }
-                        toolResults.add(call.id to result)
+                        toolResults.add(call.id to executionResult.resultJson)
+                        send(ChatStreamChunk(content = "", toolCall = call.toRecord(executionResult)))
                     }
                     conversation.add(claudeToolResultsMessage(toolResults))
                 }
@@ -852,13 +878,14 @@ class ChatApiClient @Inject constructor() {
                     val toolResults = mutableListOf<Pair<LocalToolCall, String>>()
                     for (call in outcome.calls) {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
-                        val result = if (remainingToolCalls > 0) {
+                        val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
                             executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
                         } else {
-                            toolCallLimitExceededResult()
+                            ToolExecutionResult(toolCallLimitExceededResult())
                         }
-                        toolResults.add(call to result)
+                        toolResults.add(call to executionResult.resultJson)
+                        send(ChatStreamChunk(content = "", toolCall = call.toRecord(executionResult)))
                     }
                     conversation.add(geminiToolResultsMessage(toolResults))
                 }

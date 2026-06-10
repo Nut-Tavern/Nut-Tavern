@@ -171,6 +171,13 @@ class ChatViewModel @Inject constructor(
     private val _currentToolActivity = MutableStateFlow<String?>(null)
     val currentToolActivity: StateFlow<String?> = _currentToolActivity.asStateFlow()
 
+    /**
+     * 本次流式回复已执行完成的工具调用,按发生顺序累积。落库时转成 ToolCall part。
+     * 第二批顺序约定:落库 parts = [Reasoning?] + [ToolCall...] + [Text?](工具插在思考与正文之间)。
+     * 第三批做真正的有序穿插时,改由流式 fold 精确记录各 part 的相对顺序。
+     */
+    private val _streamingToolCalls = MutableStateFlow<List<MessagePart.ToolCall>>(emptyList())
+
     private val _streamingConversationId = MutableStateFlow<String?>(null)
     val streamingConversationId: StateFlow<String?> = _streamingConversationId.asStateFlow()
     private val _streamingContent = MutableStateFlow("")
@@ -682,18 +689,21 @@ class ChatViewModel @Inject constructor(
                             val finalContent = _streamingContent.value
                             val finalReasoningContent = _streamingReasoningContent.value
                             val finalReasoningDurationMillis = _streamingReasoningDurationMillis.value
+                            val finalToolCalls = _streamingToolCalls.value
                             clearStreamingState(conversationId)
                             saveAssistantReplyIfConversationExists(
                                 conversationId,
                                 finalContent,
                                 finalReasoningContent,
                                 finalReasoningDurationMillis,
+                                finalToolCalls,
                             )
                             _isReplying.value = false
                         }
                         else -> {
                             if (_streamingConversationId.value == conversationId) {
                                 _currentToolActivity.value = chunk.toolActivity
+                                chunk.toolCall?.let { appendStreamingToolCall(it) }
                                 appendStreamingChunk(chunk.content, chunk.reasoningContent)
                             }
                         }
@@ -718,14 +728,16 @@ class ChatViewModel @Inject constructor(
             val partialContent = _streamingContent.value.trimEnd()
             val partialReasoningContent = _streamingReasoningContent.value.trimEnd()
             val partialReasoningDurationMillis = _streamingReasoningDurationMillis.value
+            val partialToolCalls = _streamingToolCalls.value
             clearStreamingState(conversationId)
-            if (partialContent.isNotBlank() || partialReasoningContent.isNotBlank()) {
+            if (partialContent.isNotBlank() || partialReasoningContent.isNotBlank() || partialToolCalls.isNotEmpty()) {
                 viewModelScope.launch {
                     saveAssistantReplyIfConversationExists(
                         conversationId,
                         partialContent,
                         partialReasoningContent,
                         partialReasoningDurationMillis,
+                        partialToolCalls,
                     )
                 }
             }
@@ -1355,6 +1367,7 @@ class ChatViewModel @Inject constructor(
         content: String,
         reasoningContent: String = "",
         reasoningDurationMillis: Long = 0L,
+        toolCalls: List<MessagePart.ToolCall> = emptyList(),
     ) {
         val reasoningSplit = GeneratedContentSanitizer.splitReasoningFromAnswer(content)
         // 只去掉**末尾**的多余空行,保留前导空行 / 中间所有换行,避免吞掉 markdown 段落分隔。
@@ -1367,7 +1380,7 @@ class ChatViewModel @Inject constructor(
                 append(reasoningSplit.reasoningContent.trimEnd())
             }
         }.trimEnd()
-        if (normalizedContent.isBlank() && normalizedReasoningContent.isBlank()) return
+        if (normalizedContent.isBlank() && normalizedReasoningContent.isBlank() && toolCalls.isEmpty()) return
         if (!conversationRepository.nonArchivedConversationExists(conversationId)) return
 
         // AI_OUTPUT 阶段正则:在落库前跑一次。流式期间不跑(完整文本才能正确匹配),
@@ -1375,8 +1388,8 @@ class ChatViewModel @Inject constructor(
         val regexProcessedContent = applyAiOutputRegex(conversationId, normalizedContent)
 
         val createdAt = System.currentTimeMillis()
-        // 落库 parts:思考块在前、正文在后,保持"思考块渲染在正文上方"的现有顺序。
-        // 第一批不产出工具调用 part(工具落库在第二批接入)。
+        // 落库 parts 顺序:思考块 → 工具调用 → 正文,保持"思考 / 工具在正文上方"的现有渲染观感。
+        // 第三批做真正的有序穿插时,改由流式 fold 精确记录各 part 的相对到达顺序。
         val assistantParts = buildList {
             if (normalizedReasoningContent.isNotBlank()) {
                 add(
@@ -1386,11 +1399,12 @@ class ChatViewModel @Inject constructor(
                     )
                 )
             }
+            addAll(toolCalls)
             if (regexProcessedContent.isNotEmpty()) {
                 add(MessagePart.Text(regexProcessedContent))
             }
         }
-        // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning 又为空时 assistantParts 会空。
+        // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning / 工具又都为空时 assistantParts 会空。
         // 不落空消息(否则渲染出一条只能长按、内容空白的行)。
         if (assistantParts.isEmpty()) return
         appendMessage(
@@ -1699,18 +1713,21 @@ class ChatViewModel @Inject constructor(
                     val finalContent = _streamingContent.value
                     val finalReasoningContent = _streamingReasoningContent.value
                     val finalReasoningDurationMillis = _streamingReasoningDurationMillis.value
+                    val finalToolCalls = _streamingToolCalls.value
                     clearStreamingState(conversationId)
                     saveAssistantReplyIfConversationExists(
                         conversationId,
                         finalContent,
                         finalReasoningContent,
                         finalReasoningDurationMillis,
+                        finalToolCalls,
                     )
                     _isReplying.value = false
                 }
                 else -> {
                     if (_streamingConversationId.value == conversationId) {
                         _currentToolActivity.value = chunk.toolActivity
+                        chunk.toolCall?.let { appendStreamingToolCall(it) }
                         appendStreamingChunk(chunk.content, chunk.reasoningContent)
                     }
                 }
@@ -2008,6 +2025,19 @@ class ChatViewModel @Inject constructor(
         val lorebookTimedEffectsJson: String?,
     )
 
+    /** 把流式过程中执行完成的工具调用累积成 ToolCall part,落库时按顺序插入消息 parts。 */
+    private fun appendStreamingToolCall(record: com.nuttavern.network.ToolCallRecord) {
+        _streamingToolCalls.update { calls ->
+            calls + MessagePart.ToolCall(
+                toolCallId = record.id,
+                toolName = record.name,
+                arguments = record.arguments,
+                result = record.result,
+                denied = record.denied,
+            )
+        }
+    }
+
     private fun appendStreamingChunk(content: String, reasoningContent: String) {
         // 流式 chunk 必须**逐字符**保留:模型把段落分隔 / 列表换行 / 代码块前后空行
         // 拆成单独 token 下发(典型如 `\n` / `\n\n`),isNotBlank 会把它们全过滤掉,
@@ -2100,6 +2130,7 @@ class ChatViewModel @Inject constructor(
             _streamingReasoningContent.value = ""
             _streamingReasoningDurationMillis.value = 0L
             _currentToolActivity.value = null
+            _streamingToolCalls.value = emptyList()
             streamingReasoningStartedAtMillis = null
             streamingReasoningEndedAtMillis = null
             streamingReasoningTimerJob?.cancel()
