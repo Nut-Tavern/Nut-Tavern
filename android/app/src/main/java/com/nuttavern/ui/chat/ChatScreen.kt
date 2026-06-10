@@ -517,7 +517,7 @@ private fun ChatScreenContent(
                 if (currentToolActivity != null) {
                     androidx.compose.material3.Surface(
                         modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
                     ) {
                         androidx.compose.foundation.layout.Row(
                             modifier = Modifier

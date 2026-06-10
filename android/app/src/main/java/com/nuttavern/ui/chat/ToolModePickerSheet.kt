@@ -2,8 +2,11 @@ package com.nuttavern.ui.chat
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -41,10 +44,12 @@ fun ToolModePickerSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.6f)
                 .padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -52,24 +57,35 @@ fun ToolModePickerSheet(
                 title = "本会话内置工具",
                 description = "控制当前会话是否允许模型调用内置工具，只影响这一个会话。",
             )
-            NutTavernSelectableRow(
-                title = "跟随全局默认",
-                subtitle = followSubtitle,
-                selected = currentMode == ConversationToolMode.FOLLOW_GLOBAL,
-                onClick = { onSelect(ConversationToolMode.FOLLOW_GLOBAL) },
-            )
-            NutTavernSelectableRow(
-                title = "本会话强制启用",
-                subtitle = "无视全局默认，这个会话始终允许调用工具",
-                selected = currentMode == ConversationToolMode.FORCE_ON,
-                onClick = { onSelect(ConversationToolMode.FORCE_ON) },
-            )
-            NutTavernSelectableRow(
-                title = "本会话强制关闭",
-                subtitle = "无视全局默认，这个会话始终不调用工具",
-                selected = currentMode == ConversationToolMode.FORCE_OFF,
-                onClick = { onSelect(ConversationToolMode.FORCE_OFF) },
-            )
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    NutTavernSelectableRow(
+                        title = "跟随全局默认",
+                        subtitle = followSubtitle,
+                        selected = currentMode == ConversationToolMode.FOLLOW_GLOBAL,
+                        onClick = { onSelect(ConversationToolMode.FOLLOW_GLOBAL) },
+                    )
+                }
+                item {
+                    NutTavernSelectableRow(
+                        title = "本会话强制启用",
+                        subtitle = "无视全局默认，这个会话始终允许调用工具",
+                        selected = currentMode == ConversationToolMode.FORCE_ON,
+                        onClick = { onSelect(ConversationToolMode.FORCE_ON) },
+                    )
+                }
+                item {
+                    NutTavernSelectableRow(
+                        title = "本会话强制关闭",
+                        subtitle = "无视全局默认，这个会话始终不调用工具",
+                        selected = currentMode == ConversationToolMode.FORCE_OFF,
+                        onClick = { onSelect(ConversationToolMode.FORCE_OFF) },
+                    )
+                }
+            }
         }
     }
 }

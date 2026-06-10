@@ -126,6 +126,7 @@ fun ToolsSettingsScreen(
                     NutTavernGroupDivider()
                     ReasoningModeRow(
                         value = settings.toolReasoningMode,
+                        onClick = { pendingFeatureNotice = "工具推理模式" },
                     )
                 }
             }
@@ -152,12 +153,13 @@ private fun RecurseLimitRow(
 @Composable
 private fun ReasoningModeRow(
     value: ToolReasoningMode,
+    onClick: () -> Unit,
 ) {
     NutTavernIconRow(
         icon = Lucide.Boxes,
         title = "工具推理模式",
         subtitle = "暂未接入工具调用带 reasoning 传参, 当前固定不传递 reasoning",
-        onClick = {},
+        onClick = onClick,
         trailing = {
             Text(
                 text = reasoningModeLabel(value),
