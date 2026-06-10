@@ -10,6 +10,7 @@ import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.model.GeneratedContentSanitizer
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
+import com.nuttavern.data.model.MessagePart
 import com.nuttavern.data.model.Modality
 import com.nuttavern.data.model.Model
 import com.nuttavern.data.model.Provider
@@ -610,7 +611,7 @@ class ChatViewModel @Inject constructor(
                 val userMessage = Message(
                     id = createMessageId("user"),
                     role = "user",
-                    content = persistedUserText,
+                    parts = listOf(MessagePart.Text(persistedUserText)),
                     attachments = attachments,
                 )
                 appendMessage(conversationId, userMessage, createdAt)
@@ -1057,7 +1058,7 @@ class ChatViewModel @Inject constructor(
     val clipboardMessage: StateFlow<String?> = _clipboardMessage.asStateFlow()
 
     fun requestCopyMessage(message: Message) {
-        _clipboardMessage.value = message.content
+        _clipboardMessage.value = message.text
     }
 
     fun clearClipboardMessage() {
@@ -1072,14 +1073,15 @@ class ChatViewModel @Inject constructor(
         if (normalizedContent.isBlank()) return
 
         val existingMessage = _currentMessages.value.firstOrNull { it.id == messageId } ?: return
-        val updatedMessage = existingMessage.copy(content = normalizedContent)
+        // 编辑只改正文:保留思考 / 工具调用块,把所有 Text part 合并成用户编辑后的单个 Text。
+        val nonTextParts = existingMessage.parts.filter { it !is MessagePart.Text }
+        val updatedParts = nonTextParts + MessagePart.Text(normalizedContent)
+        val updatedMessage = existingMessage.copy(parts = updatedParts)
 
         viewModelScope.launch {
-            conversationRepository.updateMessageContent(
+            conversationRepository.updateMessageParts(
                 messageId = messageId,
-                content = normalizedContent,
-                reasoningContent = updatedMessage.reasoningContent,
-                reasoningDurationMillis = updatedMessage.reasoningDurationMillis,
+                parts = updatedParts,
             )
             _messagesByConversationId.update { messagesByConversationId ->
                 val nextMessages = messagesByConversationId[conversationId].orEmpty()
@@ -1097,7 +1099,7 @@ class ChatViewModel @Inject constructor(
         if (conversationId.isBlank()) return
 
         if (message.role == "user") {
-            val trimmedText = message.content.trim()
+            val trimmedText = message.text.trim()
             if (trimmedText.isBlank()) return
 
             _isReplying.value = true
@@ -1247,7 +1249,7 @@ class ChatViewModel @Inject constructor(
             val greetingMessage = Message(
                 id = createMessageId("assistant"),
                 role = "assistant",
-                content = greeting,
+                parts = listOf(MessagePart.Text(greeting)),
             )
             // greeting 必须在 user 消息之前落库,createdAt 减 1 ms 保证排序稳定。
             appendMessage(newConversationId, greetingMessage, createdAt - 1)
@@ -1373,18 +1375,30 @@ class ChatViewModel @Inject constructor(
         val regexProcessedContent = applyAiOutputRegex(conversationId, normalizedContent)
 
         val createdAt = System.currentTimeMillis()
+        // 落库 parts:思考块在前、正文在后,保持"思考块渲染在正文上方"的现有顺序。
+        // 第一批不产出工具调用 part(工具落库在第二批接入)。
+        val assistantParts = buildList {
+            if (normalizedReasoningContent.isNotBlank()) {
+                add(
+                    MessagePart.Reasoning(
+                        text = normalizedReasoningContent,
+                        durationMillis = maxOf(100L, reasoningDurationMillis),
+                    )
+                )
+            }
+            if (regexProcessedContent.isNotEmpty()) {
+                add(MessagePart.Text(regexProcessedContent))
+            }
+        }
+        // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning 又为空时 assistantParts 会空。
+        // 不落空消息(否则渲染出一条只能长按、内容空白的行)。
+        if (assistantParts.isEmpty()) return
         appendMessage(
             conversationId = conversationId,
             message = Message(
                 id = createMessageId("assistant"),
                 role = "assistant",
-                content = regexProcessedContent,
-                reasoningContent = normalizedReasoningContent,
-                reasoningDurationMillis = if (normalizedReasoningContent.isNotBlank()) {
-                    maxOf(100L, reasoningDurationMillis)
-                } else {
-                    0L
-                },
+                parts = assistantParts,
             ),
             createdAt = createdAt,
         )
@@ -1706,7 +1720,7 @@ class ChatViewModel @Inject constructor(
 
     private fun buildChatMessages(conversationId: String): List<ChatMessage> {
         val messages = _messagesByConversationId.value[conversationId].orEmpty()
-        return messages.map { ChatMessage(role = it.role, content = it.content) }
+        return messages.map { ChatMessage(role = it.role, content = it.text) }
     }
 
     /**
@@ -1753,7 +1767,7 @@ class ChatViewModel @Inject constructor(
             .map { message ->
                 HistoryMessage(
                     role = message.role,
-                    content = message.content,
+                    content = message.text,
                     images = if (allowImageInlining) encodeAttachmentsForRequest(message.attachments) else emptyList(),
                 )
             }

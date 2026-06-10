@@ -50,4 +50,40 @@ class ChatModelsTest {
         assertEquals("Chat", ChatRunMode.CHAT.label)
         assertEquals("Agents", ChatRunMode.AGENTS.label)
     }
+
+    @Test
+    fun message_text_concatenatesTextPartsAndSkipsOthers() {
+        val message = Message(
+            id = "m1",
+            role = "assistant",
+            parts = listOf(
+                MessagePart.Reasoning("想一下", 100L),
+                MessagePart.Text("前半"),
+                MessagePart.ToolCall("c", "t", "{}", result = "ok"),
+                MessagePart.Text("后半"),
+            ),
+        )
+        // 只取 Text part 拼接(无分隔符),跳过 Reasoning / ToolCall。
+        assertEquals("前半后半", message.text)
+    }
+
+    @Test
+    fun message_reasoning_returnsLastReasoningOrNull() {
+        val withReasoning = Message(
+            id = "m1",
+            role = "assistant",
+            parts = listOf(
+                MessagePart.Reasoning("第一段", 100L),
+                MessagePart.Reasoning("第二段", 200L),
+            ),
+        )
+        assertEquals(MessagePart.Reasoning("第二段", 200L), withReasoning.reasoning)
+
+        val noReasoning = Message(
+            id = "m2",
+            role = "user",
+            parts = listOf(MessagePart.Text("hi")),
+        )
+        assertEquals(null, noReasoning.reasoning)
+    }
 }

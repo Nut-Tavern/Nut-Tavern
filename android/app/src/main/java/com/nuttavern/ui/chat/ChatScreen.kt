@@ -247,7 +247,7 @@ fun ChatScreen(
                         onCopyMessage = viewModel::requestCopyMessage,
                         onEditMessage = { message ->
                             editMessage.value = message
-                            editContent = message.content
+                            editContent = message.text
                         },
                         onRegenerateMessage = { message -> regenerateMessage.value = message },
                         onDeleteMessage = { message -> pendingDeleteMessage.value = message },

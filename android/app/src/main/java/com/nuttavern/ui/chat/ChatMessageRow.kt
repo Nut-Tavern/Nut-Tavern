@@ -77,12 +77,18 @@ internal fun ChatMessageRow(
 ) {
     val isUserMessage = message.role == "user"
     val alignment = if (isUserMessage) Alignment.CenterEnd else Alignment.CenterStart
+    // 第一批沿用"先思考块再正文"的固定渲染:从 parts 抽出正文文本与思考块。
+    // 有序穿插(groupMessageParts)在第三批接入。
+    val messageText = message.text
     val visibleContent = if (isUserMessage) {
-        message.content
+        messageText
     } else {
-        GeneratedContentSanitizer.sanitizeGeneratedDisplayText(message.content)
+        GeneratedContentSanitizer.sanitizeGeneratedDisplayText(messageText)
     }
-    val visibleReasoningContent = GeneratedContentSanitizer.sanitizeGeneratedDisplayText(message.reasoningContent)
+    val reasoningPart = message.reasoning
+    val visibleReasoningContent = reasoningPart
+        ?.let { GeneratedContentSanitizer.sanitizeGeneratedDisplayText(it.text) }
+        .orEmpty()
 
     var actionsSheetVisible by remember(message.id) { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
@@ -113,7 +119,7 @@ internal fun ChatMessageRow(
             // ChatReasoningBlock 自身决定宽度(折叠态非全宽);这里给个外层 padding 让它贴左对齐。
             ChatReasoningBlock(
                 reasoningContent = visibleReasoningContent,
-                reasoningDurationMillis = message.reasoningDurationMillis,
+                reasoningDurationMillis = reasoningPart?.durationMillis ?: 0L,
                 isStreaming = false,
             )
             Spacer(modifier = Modifier.height(4.dp))

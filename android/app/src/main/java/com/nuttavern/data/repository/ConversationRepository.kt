@@ -9,6 +9,7 @@ import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.tools.ConversationToolMode
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
+import com.nuttavern.data.model.MessagePart
 import com.nuttavern.data.model.ThinkingLevel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
@@ -16,6 +17,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -49,13 +51,11 @@ class ConversationRepository @Inject constructor(
         messageDao.insert(message.toEntity(conversationId, createdAt))
     }
 
-    suspend fun updateMessageContent(
+    suspend fun updateMessageParts(
         messageId: String,
-        content: String,
-        reasoningContent: String,
-        reasoningDurationMillis: Long,
+        parts: List<MessagePart>,
     ) {
-        messageDao.updateContentById(messageId, content, reasoningContent, reasoningDurationMillis)
+        messageDao.updatePartsById(messageId, encodeParts(parts))
     }
 
     suspend fun deleteMessage(messageId: String) {
@@ -239,9 +239,7 @@ class ConversationRepository @Inject constructor(
         return Message(
             id = id,
             role = role,
-            content = content,
-            reasoningContent = reasoningContent,
-            reasoningDurationMillis = reasoningDurationMillis,
+            parts = decodeParts(partsJson),
             attachments = decodeAttachments(attachmentsJson),
         )
     }
@@ -251,12 +249,27 @@ class ConversationRepository @Inject constructor(
             id = id,
             conversationId = conversationId,
             role = role,
-            content = content,
-            reasoningContent = reasoningContent,
-            reasoningDurationMillis = reasoningDurationMillis,
+            partsJson = encodeParts(parts),
             createdAt = createdAt,
             attachmentsJson = encodeAttachments(attachments),
         )
+    }
+
+    private fun decodeParts(json: String): List<MessagePart> {
+        if (json.isBlank() || json == "[]") return emptyList()
+        // 损坏 / 不可识别(如未来新增 part type)的 JSON 不应让整个会话加载崩:退化为空 parts,
+        // 只丢这一条消息的内容。但不静默 — 记一条 warning 便于排查(对齐 PresetDataStore 等的 Log.w 口径)。
+        return runCatching {
+            partsJsonCodec.decodeFromString(ListSerializer(MessagePart.serializer()), json)
+        }.getOrElse { error ->
+            android.util.Log.w("ConversationRepository", "decodeParts failed, dropping message content", error)
+            emptyList()
+        }
+    }
+
+    private fun encodeParts(parts: List<MessagePart>): String {
+        if (parts.isEmpty()) return "[]"
+        return partsJsonCodec.encodeToString(ListSerializer(MessagePart.serializer()), parts)
     }
 
     private fun decodeAttachments(json: String): List<ImageAttachment> {
@@ -314,5 +327,12 @@ class ConversationRepository @Inject constructor(
         val SUPPORTED_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
 
         val attachmentsJsonCodec = Json { ignoreUnknownKeys = true }
+
+        // MessagePart 多态序列化:判别字段用 type,默认值(result/denied)写盘保证 round-trip 稳定。
+        val partsJsonCodec = Json {
+            ignoreUnknownKeys = true
+            encodeDefaults = true
+            classDiscriminator = "type"
+        }
     }
 }

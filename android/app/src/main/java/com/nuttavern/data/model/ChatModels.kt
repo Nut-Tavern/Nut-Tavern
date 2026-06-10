@@ -52,15 +52,24 @@ data class ConversationSummary(
 data class Message(
     val id: String,
     val role: String,
-    val content: String,
-    val reasoningContent: String = "",
-    val reasoningDurationMillis: Long = 0L,
+    /**
+     * 消息的有序内容块。正文 / 思考 / 工具调用按到达顺序穿插(顺序即渲染顺序)。
+     * 取代旧的 content / reasoningContent / reasoningDurationMillis 三个并列字段。
+     */
+    val parts: List<MessagePart>,
     /**
      * 用户随消息发送的图片附件。空 = 纯文本消息(老消息、assistant 回复)。
      * 二进制落 [filesDir],这里只引用路径,发请求时按 [ImageAttachment.path] 读文件转 base64。
      */
     val attachments: List<ImageAttachment> = emptyList(),
-)
+) {
+    /** 拼接成纯正文文本:喂 API history / 标题生成 / 正则匹配用,跳过思考与工具块。 */
+    val text: String get() = parts.filterIsInstance<MessagePart.Text>().joinToString("") { it.text }
+
+    /** 最后一个思考块(如有)。渲染思考块时用。 */
+    val reasoning: MessagePart.Reasoning?
+        get() = parts.filterIsInstance<MessagePart.Reasoning>().lastOrNull()
+}
 
 /**
  * 一张随消息发送的图片附件。

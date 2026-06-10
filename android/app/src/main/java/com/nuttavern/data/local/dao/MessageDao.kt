@@ -22,17 +22,13 @@ interface MessageDao {
     @Query(
         """
         UPDATE messages
-        SET content = :content,
-            reasoningContent = :reasoningContent,
-            reasoningDurationMillis = :reasoningDurationMillis
+        SET partsJson = :partsJson
         WHERE id = :messageId
         """,
     )
-    suspend fun updateContentById(
+    suspend fun updatePartsById(
         messageId: String,
-        content: String,
-        reasoningContent: String,
-        reasoningDurationMillis: Long,
+        partsJson: String,
     )
 
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")

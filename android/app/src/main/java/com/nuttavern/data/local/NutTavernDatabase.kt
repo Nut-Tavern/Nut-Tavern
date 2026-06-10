@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 19,
+    version = 20,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -303,6 +303,35 @@ abstract class NutTavernDatabase : RoomDatabase() {
                 if (!db.hasColumn("conversations", "enabledToolIdsJson")) {
                     db.execSQL("ALTER TABLE `conversations` ADD COLUMN `enabledToolIdsJson` TEXT DEFAULT NULL")
                 }
+            }
+        }
+
+        /**
+         * 消息表换成有序内容块模型(融合渲染):用单列 partsJson 取代 content / reasoningContent /
+         * reasoningDurationMillis 三个并列字段。
+         *
+         * **整表重建,清空历史消息**:旧的并列字段无法无损映射到有序 parts(尤其工具调用旧数据根本不存在),
+         * 且本仓库骨架期不留存历史聊天记录(沿用 MIGRATION_9_10 的整表重建先例)。
+         * conversations 表不动。
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP TABLE IF EXISTS `messages`")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `messages` (
+                        `id` TEXT NOT NULL,
+                        `conversationId` TEXT NOT NULL,
+                        `role` TEXT NOT NULL,
+                        `partsJson` TEXT NOT NULL DEFAULT '[]',
+                        `createdAt` INTEGER NOT NULL DEFAULT 0,
+                        `attachmentsJson` TEXT NOT NULL DEFAULT '[]',
+                        PRIMARY KEY(`id`),
+                        FOREIGN KEY(`conversationId`) REFERENCES `conversations`(`id`) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `messages` (`conversationId`)")
             }
         }
 

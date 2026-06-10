@@ -22,9 +22,13 @@ data class MessageEntity(
     @PrimaryKey val id: String,
     val conversationId: String,
     val role: String,
-    val content: String,
-    @ColumnInfo(defaultValue = "''") val reasoningContent: String = "",
-    @ColumnInfo(defaultValue = "0") val reasoningDurationMillis: Long = 0L,
+    /**
+     * 消息内容块列表(JSON 数组字符串),序列化自 `List<com.nuttavern.data.model.MessagePart>`。
+     * 取代旧的 content / reasoningContent / reasoningDurationMillis 三个并列字段:
+     * 正文 / 思考 / 工具调用按到达顺序作为有序 parts 存在同一个字段里,渲染时穿插。
+     * 空数组 = 空消息。编解码见 [com.nuttavern.data.repository.ConversationRepository] 的 partsJsonCodec。
+     */
+    @ColumnInfo(defaultValue = "'[]'") val partsJson: String,
     @ColumnInfo(defaultValue = "0") val createdAt: Long = System.currentTimeMillis(),
     /**
      * 图片附件列表(JSON 数组字符串)。空数组 = 纯文本消息。
