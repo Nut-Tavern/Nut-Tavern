@@ -43,6 +43,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Job
@@ -307,6 +308,16 @@ class ChatViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(5_000),
         initialValue = 0 to 0,
     )
+
+    /** 内置工具总数 / 当前会话启用数,供 SettingsDrawer 副标显示。 */
+    val toolCounts: StateFlow<Pair<Int, Int>> = _currentEnabledToolIds.map { enabledIds ->
+        chatTools.size to chatTools.count { it.id in enabledIds }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = chatTools.size to 0,
+    )
+
 
     private var streamingJob: Job? = null
     private var streamingReasoningStartedAtMillis: Long? = null
@@ -952,6 +963,16 @@ class ChatViewModel @Inject constructor(
         } else {
             _currentEnabledToolIds.value - toolId
         }
+        applyEnabledToolIdsToCurrentConversation(nextEnabledToolIds)
+    }
+
+    /** 工具选择 Sheet "应用"时调用,一次性替换当前会话启用的工具集。只保留注册表里存在的工具 id。 */
+    fun updateToolSelection(selectedToolIds: Set<String>) {
+        val validIds = selectedToolIds.filter { id -> chatTools.any { it.id == id } }.toSet()
+        applyEnabledToolIdsToCurrentConversation(validIds)
+    }
+
+    private fun applyEnabledToolIdsToCurrentConversation(nextEnabledToolIds: Set<String>) {
         val nextToolMode = toolModeForEnabledToolIds(nextEnabledToolIds)
         _currentEnabledToolIds.value = nextEnabledToolIds
         _currentToolMode.value = nextToolMode

@@ -1,16 +1,12 @@
 package com.nuttavern.ui.chat
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.composables.icons.lucide.BookOpenText
@@ -23,13 +19,11 @@ import com.composables.icons.lucide.SlidersHorizontal
 import com.composables.icons.lucide.Table
 import com.composables.icons.lucide.TableOfContents
 import com.composables.icons.lucide.TableProperties
-import com.composables.icons.lucide.UserRound
 import com.composables.icons.lucide.Wrench
 import com.nuttavern.data.character.Character
 import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.regex.RegexScript
-import com.nuttavern.network.ChatTool
 import com.nuttavern.ui.character.CharacterAvatarPlaceholder
 import com.nuttavern.ui.persona.PersonaAvatarPlaceholder
 import com.nuttavern.ui.character.NEW_CHARACTER_PLACEHOLDER_ID
@@ -38,7 +32,6 @@ import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
 import com.nuttavern.ui.components.NutTavernIconRow
-import com.nuttavern.ui.components.NutTavernSectionLabel
 import com.nuttavern.ui.persona.personaPrimaryDisplay
 import com.nuttavern.ui.persona.personaSubtitleDisplay
 import com.nuttavern.ui.preset.PresetAvatarPlaceholder
@@ -70,15 +63,13 @@ internal fun SettingsDrawer(
     globalRegexScripts: List<RegexScript>,
     regexCounts: Pair<Int, Int>,
     lorebookCounts: Pair<Int, Int>,
-    chatTools: List<ChatTool>,
-    currentEnabledToolIds: Set<String>,
-    approvalRequiredToolIds: Set<String>,
-    onToolEnabledChange: (toolId: String, enabled: Boolean) -> Unit,
+    toolCounts: Pair<Int, Int>,
     onOpenUnavailableFeature: (String) -> Unit,
     onOpenPersonaPicker: () -> Unit,
     onOpenPresetPicker: () -> Unit,
     onOpenRegexPicker: () -> Unit,
     onOpenLorebookPicker: () -> Unit,
+    onOpenToolPicker: () -> Unit,
     onNavigateToCharacterDetail: (characterId: String) -> Unit,
     onDismiss: () -> Unit,
     modifier: Modifier = Modifier,
@@ -133,31 +124,12 @@ internal fun SettingsDrawer(
             }
 
             item(key = "section-tools") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    NutTavernSectionLabel(text = "内置工具")
-                    if (chatTools.isEmpty()) {
-                        Text(
-                            text = "暂无可用内置工具",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 16.dp)
-                        )
-                    } else {
-                        chatTools.forEach { tool ->
-                            SidebarToolCard(
-                                title = tool.displayName,
-                                subtitle = sidebarToolSubtitle(tool.name, tool.description),
-                                enabledForConversation = tool.id in currentEnabledToolIds,
-                                approvalRequired = tool.id in approvalRequiredToolIds,
-                                onEnabledChange = { enabled -> onToolEnabledChange(tool.id, enabled) },
-                            )
-                        }
-                    }
-                }
-            }
-
-            item(key = "section-mcp") {
                 NutTavernGroupSection {
+                    ToolsEntryRow(
+                        counts = toolCounts,
+                        onClick = onOpenToolPicker,
+                    )
+                    NutTavernGroupDivider()
                     NutTavernIconRow(
                         icon = Lucide.Server,
                         title = "MCP 服务器",
@@ -325,6 +297,29 @@ private fun LorebookEntryRow(
     )
 }
 
+/**
+ * "内置工具"动态行。显示总数 / 本会话启用数;点击弹 [ToolPickerSheet] 管理本会话启用的工具。
+ */
+@Composable
+private fun ToolsEntryRow(
+    counts: Pair<Int, Int>,
+    onClick: () -> Unit,
+) {
+    val (total, enabled) = counts
+    val subtitle = when {
+        total == 0 -> "暂无可用工具"
+        enabled == 0 -> "共 $total 个,本会话未启用"
+        else -> "共 $total 个,本会话启用 $enabled 个"
+    }
+    NutTavernIconRow(
+        icon = Lucide.Wrench,
+        title = "内置工具",
+        subtitle = subtitle,
+        showTrailingChevron = true,
+        onClick = onClick,
+    )
+}
+
 @Composable
 private fun DrawerStaticItems(items: List<DrawerItem>) {
     items.forEachIndexed { index, item ->
@@ -345,6 +340,3 @@ private data class DrawerItem(
     val icon: ImageVector,
     val onClick: () -> Unit,
 )
-
-private fun sidebarToolSubtitle(name: String, description: String): String =
-    if (name == "get_current_time") "获取设备当前本地时间" else description.ifBlank { name }
