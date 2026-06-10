@@ -25,8 +25,8 @@ enum class ConversationToolMode(val storageValue: String) {
 /**
  * 判定当前会话是否应携带内置工具。
  *
- * [FOLLOW_GLOBAL] 只作为旧数据兼容:旧版默认开关为启用,因此这里按启用处理。新会话创建时会根据
- * [LocalToolsSettings.defaultEnabled] 写入 [FORCE_ON] 或 [FORCE_OFF],之后不再动态跟随全局开关。
+ * [FOLLOW_GLOBAL] 只作为旧数据兼容:旧版默认开关为启用,因此这里按启用处理。新 UI 使用会话级
+ * enabled tool ids 控制具体工具是否可用,这个枚举只保留给旧数据与空会话占位状态。
  */
 fun ConversationToolMode.resolveToolsEnabled(): Boolean = when (this) {
     ConversationToolMode.FOLLOW_GLOBAL -> true

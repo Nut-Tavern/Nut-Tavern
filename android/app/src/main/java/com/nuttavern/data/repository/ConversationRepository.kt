@@ -208,6 +208,7 @@ class ConversationRepository @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
+            enabledToolIdsJson = enabledToolIdsJson,
             thinkingLevel = ThinkingLevel.parse(thinkingLevel),
             toolMode = ConversationToolMode.fromStorage(toolMode),
         )
@@ -228,6 +229,7 @@ class ConversationRepository @Inject constructor(
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
             lorebookTimedEffectsJson = lorebookTimedEffectsJson,
+            enabledToolIdsJson = enabledToolIdsJson,
             thinkingLevel = ThinkingLevel.serialize(thinkingLevel),
             toolMode = toolMode.storageValue,
         )

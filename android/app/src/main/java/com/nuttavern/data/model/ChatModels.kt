@@ -37,6 +37,8 @@ data class ConversationSummary(
      */
     val enabledOrphanRegexIds: String? = null,
     val lorebookTimedEffectsJson: String = "{}",
+    /** 当前会话启用的客户端内置工具 id 列表(JSON 数组字符串)。null = 老会话兼容,运行时用默认工具集。 */
+    val enabledToolIdsJson: String? = null,
     /**
      * 当前会话的思考量(reasoning effort)。会话级:切会话保留各自档位,关 app 不丢。
      * null 等价 [ThinkingLevel.Auto]("自动",不向后端发送思考字段)。

@@ -7,7 +7,6 @@ import com.nuttavern.data.character.CharacterRepository
 import com.nuttavern.data.model.AssistantConfig
 import com.nuttavern.data.model.ChatRunMode
 import com.nuttavern.data.model.ConversationSummary
-import com.nuttavern.data.tools.resolveToolsEnabled
 import com.nuttavern.data.model.GeneratedContentSanitizer
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
@@ -138,13 +137,20 @@ class ChatViewModel @Inject constructor(
     private val _currentThinkingLevel = MutableStateFlow<ThinkingLevel>(ThinkingLevel.Default)
     val currentThinkingLevel: StateFlow<ThinkingLevel> = _currentThinkingLevel.asStateFlow()
 
-    /** 当前会话的内置工具总开关。会话级,新会话创建时由全局默认固化,之后不再动态跟随全局开关。 */
+    /** 当前会话的内置工具总开关。旧版兼容字段;新 UI 使用 [currentEnabledToolIds] 做按工具开关。 */
     private val _currentToolMode =
         MutableStateFlow(com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL)
     val currentToolMode: StateFlow<com.nuttavern.data.tools.ConversationToolMode> =
         _currentToolMode.asStateFlow()
 
-    /** 内置工具配置(新会话默认总开关 / 各工具默认启用 / 各工具确认),供右侧栏与设置页展示。 */
+    /** 当前会话启用的内置工具 id。右侧栏工具卡片直接读写这个集合。 */
+    private val _currentEnabledToolIds = MutableStateFlow<Set<String>>(emptySet())
+    val currentEnabledToolIds: StateFlow<Set<String>> = _currentEnabledToolIds.asStateFlow()
+
+    /** 注册表里的全部内置工具定义,供右侧栏直接渲染工具卡片。 */
+    val chatTools: List<com.nuttavern.network.ChatTool> = chatToolRegistry.tools
+
+    /** 内置工具配置(各工具默认启用 / 各工具确认),供右侧栏与设置页展示。 */
     val localToolsSettings: StateFlow<com.nuttavern.data.tools.LocalToolsSettings> =
         localToolsRepository.settings.stateIn(
             viewModelScope,
@@ -376,6 +382,7 @@ class ChatViewModel @Inject constructor(
                     _currentPresetId.value = nextConversation.presetId
                     _currentThinkingLevel.value = nextConversation.thinkingLevel
                     _currentToolMode.value = nextConversation.toolMode
+                    _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
                 } else {
                     _currentMessages.value = emptyList()
                 }
@@ -487,6 +494,7 @@ class ChatViewModel @Inject constructor(
             _currentPresetId.value = savedConversation.presetId
             _currentThinkingLevel.value = savedConversation.thinkingLevel
             _currentToolMode.value = savedConversation.toolMode
+            _currentEnabledToolIds.value = enabledToolIdsForConversation(savedConversation)
             return
         }
 
@@ -500,7 +508,9 @@ class ChatViewModel @Inject constructor(
             _currentPersonaId.value = saved.personaId
             _currentPresetId.value = saved.presetId
             _currentThinkingLevel.value = ThinkingLevel.parse(saved.thinkingLevel)
-            _currentToolMode.value = com.nuttavern.data.tools.ConversationToolMode.fromStorage(saved.toolMode)
+            val restoredToolMode = com.nuttavern.data.tools.ConversationToolMode.fromStorage(saved.toolMode)
+            _currentToolMode.value = restoredToolMode
+            _currentEnabledToolIds.value = defaultToolIdsForPlaceholder(restoredToolMode)
             _currentMessages.value = emptyList()
             return
         }
@@ -514,6 +524,7 @@ class ChatViewModel @Inject constructor(
             _currentPresetId.value = nextConversation.presetId
             _currentThinkingLevel.value = nextConversation.thinkingLevel
             _currentToolMode.value = nextConversation.toolMode
+            _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
         } else {
             _currentMessages.value = emptyList()
         }
@@ -720,6 +731,7 @@ class ChatViewModel @Inject constructor(
         _currentPresetId.value = conversation.presetId
         _currentThinkingLevel.value = conversation.thinkingLevel
         _currentToolMode.value = conversation.toolMode
+        _currentEnabledToolIds.value = enabledToolIdsForConversation(conversation)
         _draft.value = ""
     }
 
@@ -737,9 +749,10 @@ class ChatViewModel @Inject constructor(
         _currentMessages.value = emptyList()
         _draft.value = ""
         _currentThinkingLevel.value = ThinkingLevel.Default
-        // 新会话占位态先保留旧存储值作为"待创建时读取最新默认"的内部哨兵。
-        // 真正落库在 ensureCurrentConversation,会读取 LocalToolsRepository 最新值并固化为 FORCE_ON / FORCE_OFF。
-        _currentToolMode.value = com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL
+        // 新会话占位态先用当前默认工具集初始化;用户可在右侧栏继续按工具切换。
+        // 真正落库在 ensureCurrentConversation,会写入 _currentEnabledToolIds 的当前值。
+        _currentEnabledToolIds.value = defaultEnabledToolIdsForNewConversation()
+        _currentToolMode.value = toolModeForEnabledToolIds(_currentEnabledToolIds.value)
         viewModelScope.launch {
             _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
             _currentPresetId.value = resolveDefaultPresetId()
@@ -931,20 +944,30 @@ class ChatViewModel @Inject constructor(
         _errorMessage.value = null
     }
 
-    /**
-     * 切换当前会话内置工具开关模式。与 [selectThinkingLevel] 同模式:会话级,落库,切模式不影响其他会话。
-     */
-    fun selectToolMode(mode: com.nuttavern.data.tools.ConversationToolMode) {
-        _currentToolMode.value = mode
+    /** 切换当前会话是否启用某个内置工具。空会话占位态只改内存,首条消息创建会话时落库。 */
+    fun setToolEnabledForCurrentConversation(toolId: String, enabled: Boolean) {
+        if (toolId.isBlank()) return
+        val nextEnabledToolIds = if (enabled) {
+            _currentEnabledToolIds.value + toolId
+        } else {
+            _currentEnabledToolIds.value - toolId
+        }
+        val nextToolMode = toolModeForEnabledToolIds(nextEnabledToolIds)
+        _currentEnabledToolIds.value = nextEnabledToolIds
+        _currentToolMode.value = nextToolMode
 
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
         val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
-        if (conversation.toolMode == mode) return
+        val nextJson = encodeStringListToJson(nextEnabledToolIds.toList())
+        if (conversation.enabledToolIdsJson == nextJson) return
 
         viewModelScope.launch {
-            val updated = conversation.copy(toolMode = mode)
+            val updated = conversation.copy(
+                enabledToolIdsJson = nextJson,
+                toolMode = nextToolMode,
+            )
             conversationRepository.updateConversation(updated)
             _conversationList.update { list ->
                 list.map { if (it.id == conversationId) updated else it }
@@ -971,29 +994,20 @@ class ChatViewModel @Inject constructor(
 
     /**
      * 本次发送实际要带的内置工具。三重门控:
-     * 1. 会话 toolMode → 决定本会话是否启用工具;
-     * 2. settings.enabledToolIds → 只下发被勾选为"新会话默认启用"的工具;
-     * 3. settings.approvalRequiredToolIds → 合并到 [ChatTool.needsApproval],实现每工具确认;
+     * 1. 当前会话 enabledToolIds → 决定本会话启用哪些工具;
+     * 2. settings.approvalRequiredToolIds → 合并到 [ChatTool.needsApproval],实现每工具确认;
      * 4. 注册表里存在的工具定义。
      */
     private fun resolveActiveTools(
         settings: com.nuttavern.data.tools.LocalToolsSettings,
     ): List<com.nuttavern.network.ChatTool> {
-        val enabledForConversation = _currentToolMode.value.resolveToolsEnabled()
-        if (!enabledForConversation) return emptyList()
+        val enabledToolIds = _currentEnabledToolIds.value
+        if (enabledToolIds.isEmpty()) return emptyList()
         return chatToolRegistry.tools
-            .filter { settings.isToolEnabledByDefault(it.id) }
+            .filter { it.id in enabledToolIds }
             .map { tool ->
                 tool.copy(needsApproval = settings.isApprovalRequiredForTool(tool.id))
             }
-    }
-
-    private fun defaultToolModeForNewConversation(defaultEnabled: Boolean): com.nuttavern.data.tools.ConversationToolMode {
-        return if (defaultEnabled) {
-            com.nuttavern.data.tools.ConversationToolMode.FORCE_ON
-        } else {
-            com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF
-        }
     }
 
     /**
@@ -1173,12 +1187,11 @@ class ChatViewModel @Inject constructor(
         val thinkingLevel = _currentThinkingLevel.value
         val enabledRegexGroupIds = snapshotEnabledRegexGroupIdsJson()
         val enabledOrphanRegexIds = snapshotEnabledOrphanRegexIdsJson()
+        val enabledToolIds = _currentEnabledToolIds.value
+        val enabledToolIdsJson = snapshotEnabledToolIdsJson()
+        val toolMode = toolModeForEnabledToolIds(enabledToolIds)
         val newConversationId = "conv-${System.currentTimeMillis()}"
         val titleSeed = character?.name?.takeIf { it.isNotBlank() } ?: firstMessage
-        val localToolsConfig = localToolsRepository.settings.first()
-        val toolMode = _currentToolMode.value.takeUnless {
-            it == com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL
-        } ?: defaultToolModeForNewConversation(localToolsConfig.defaultEnabled)
         val conversation = ConversationSummary(
             id = newConversationId,
             title = titleSeed.take(20),
@@ -1190,6 +1203,7 @@ class ChatViewModel @Inject constructor(
             presetId = presetId,
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
+            enabledToolIdsJson = enabledToolIdsJson,
             thinkingLevel = thinkingLevel,
             toolMode = toolMode,
         )
@@ -1202,6 +1216,7 @@ class ChatViewModel @Inject constructor(
         _currentPresetId.value = presetId
         _currentThinkingLevel.value = thinkingLevel
         _currentToolMode.value = toolMode
+        _currentEnabledToolIds.value = enabledToolIds
         _currentMessages.value = emptyList()
 
         // 角色绑定时插入 greeting 作为新会话的首条 assistant 消息(对齐酒馆 first_mes 行为)。
@@ -1263,6 +1278,7 @@ class ChatViewModel @Inject constructor(
         _currentPresetId.value = nextConversation.presetId
         _currentThinkingLevel.value = nextConversation.thinkingLevel
         _currentToolMode.value = nextConversation.toolMode
+        _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
         _draft.value = ""
         _isReplying.value = false
     }
@@ -1297,6 +1313,7 @@ class ChatViewModel @Inject constructor(
             _currentPresetId.value = nextConversation.presetId
             _currentThinkingLevel.value = nextConversation.thinkingLevel
             _currentToolMode.value = nextConversation.toolMode
+            _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
         }
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -1497,6 +1514,43 @@ class ChatViewModel @Inject constructor(
         val snapshot = regexScriptRepository.snapshot.first()
         val ids = snapshot.orphanScripts.filter { !it.disabled }.map { it.id }
         return encodeStringListToJson(ids)
+    }
+
+    private fun snapshotEnabledToolIdsJson(): String {
+        return encodeStringListToJson(_currentEnabledToolIds.value.toList())
+    }
+
+    private fun enabledToolIdsForConversation(conversation: ConversationSummary): Set<String> {
+        val storedIds = parseJsonStringList(conversation.enabledToolIdsJson)
+        if (storedIds.isNotEmpty() || conversation.enabledToolIdsJson == "[]") return storedIds.toSet()
+        if (conversation.toolMode == com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF) return emptySet()
+        return localToolsSettings.value.enabledToolIds
+    }
+
+    private fun defaultToolIdsForPlaceholder(
+        toolMode: com.nuttavern.data.tools.ConversationToolMode,
+    ): Set<String> {
+        return when (toolMode) {
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF -> emptySet()
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_ON -> localToolsSettings.value.enabledToolIds
+            com.nuttavern.data.tools.ConversationToolMode.FOLLOW_GLOBAL -> defaultEnabledToolIdsForNewConversation()
+        }
+    }
+
+    private fun defaultEnabledToolIdsForNewConversation(): Set<String> {
+        val settings = localToolsSettings.value
+        if (!settings.defaultEnabled) return emptySet()
+        return settings.enabledToolIds
+    }
+
+    private fun toolModeForEnabledToolIds(
+        enabledToolIds: Set<String>,
+    ): com.nuttavern.data.tools.ConversationToolMode {
+        return if (enabledToolIds.isEmpty()) {
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF
+        } else {
+            com.nuttavern.data.tools.ConversationToolMode.FORCE_ON
+        }
     }
 
     private fun encodeStringListToJson(ids: List<String>): String {

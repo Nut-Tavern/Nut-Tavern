@@ -10,7 +10,7 @@ import kotlinx.serialization.Serializable
  * 每个内置工具默认是否启用、每个工具调用前是否需要人工确认"。独立 DataStore 文件,爆炸半径自包含。
  *
  * 启用语义:
- * - [defaultEnabled]:仅决定新建会话时该会话的默认工具总开关,不动态影响已创建会话;
+ * - [defaultEnabled]:决定新建会话占位态是否默认带上 [enabledToolIds],不动态影响已创建会话;
  * - [enabledToolIds]:新会话默认启用的工具 [com.nuttavern.network.ChatTool.id] 集合。空集表示
  *   "新会话默认不启用任何具体工具";
  * - [approvalRequiredToolIds]:调用前需要人工确认的工具 id 集合;

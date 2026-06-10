@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 18,
+    version = 19,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -289,6 +289,19 @@ abstract class NutTavernDatabase : RoomDatabase() {
                     db.execSQL(
                         "ALTER TABLE `conversations` ADD COLUMN `toolMode` TEXT NOT NULL DEFAULT 'follow_global'",
                     )
+                }
+            }
+        }
+
+        /**
+         * 会话加 enabledToolIdsJson 字段:当前会话启用的客户端内置工具 id 列表(JSON 数组)。
+         *
+         * 老会话默认 NULL,运行时退回当前默认工具集;新会话创建时写入默认工具快照。
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("conversations", "enabledToolIdsJson")) {
+                    db.execSQL("ALTER TABLE `conversations` ADD COLUMN `enabledToolIdsJson` TEXT DEFAULT NULL")
                 }
             }
         }

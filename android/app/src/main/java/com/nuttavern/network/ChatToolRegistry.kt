@@ -11,8 +11,8 @@ import javax.inject.Singleton
  * 客户端内置工具注册表。
  *
  * 集中持有所有本地 function calling 工具的**定义**(不含启用状态)。启用状态由
- * [com.nuttavern.data.tools.LocalToolsRepository] 持久化,发送链路在 [com.nuttavern.ui.viewmodel.ChatViewModel]
- * 里按"全局默认 + 会话 toolMode + 单工具启用集"算出本次实际可用工具,再传进 streamChat。
+ * [com.nuttavern.data.tools.LocalToolsRepository] 和会话级启用列表持久化,发送链路在
+ * [com.nuttavern.ui.viewmodel.ChatViewModel] 里算出本次实际可用工具,再传进 streamChat。
  *
  * 新增工具:在这里 new 一个 [ChatTool] 加进 [tools]。execute 体保持纯粹(只算结果、不碰 UI),
  * 需要 Android 上下文的工具(剪贴板等)后续按需注入再加。

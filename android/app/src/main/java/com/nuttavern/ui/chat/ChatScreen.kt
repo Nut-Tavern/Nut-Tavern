@@ -84,10 +84,10 @@ fun ChatScreen(
     val globalRegexScripts by viewModel.globalRegexScripts.collectAsState()
     val regexCounts by viewModel.regexCounts.collectAsState()
     val lorebookCounts by viewModel.lorebookCounts.collectAsState()
-    val currentToolMode by viewModel.currentToolMode.collectAsState()
-    val localToolsSettings by viewModel.localToolsSettings.collectAsState()
     val currentToolActivity by viewModel.currentToolActivity.collectAsState()
     val pendingToolApproval by viewModel.pendingToolApproval.collectAsState()
+    val currentEnabledToolIds by viewModel.currentEnabledToolIds.collectAsState()
+    val localToolsSettings by viewModel.localToolsSettings.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
@@ -109,7 +109,6 @@ fun ChatScreen(
     var showPresetPicker by remember { mutableStateOf(false) }
     var showRegexPicker by remember { mutableStateOf(false) }
     var showLorebookPicker by remember { mutableStateOf(false) }
-    var showToolModePicker by remember { mutableStateOf(false) }
     var editContent by remember { mutableStateOf("") }
 
     val shouldShowStreaming = streamingConversationId == currentId &&
@@ -198,11 +197,10 @@ fun ChatScreen(
                             globalRegexScripts = globalRegexScripts,
                             regexCounts = regexCounts,
                             lorebookCounts = lorebookCounts,
-                            toolModeSubtitle = toolModeSubtitle(
-                                currentConversationId = currentId,
-                                currentMode = currentToolMode,
-                                newConversationDefaultEnabled = localToolsSettings.defaultEnabled,
-                            ),
+                            chatTools = viewModel.chatTools,
+                            currentEnabledToolIds = currentEnabledToolIds,
+                            approvalRequiredToolIds = localToolsSettings.approvalRequiredToolIds,
+                            onToolEnabledChange = viewModel::setToolEnabledForCurrentConversation,
                             onOpenUnavailableFeature = { featureName ->
                                 pendingSidebarFeatureNotice = featureName
                             },
@@ -210,7 +208,6 @@ fun ChatScreen(
                             onOpenPresetPicker = { showPresetPicker = true },
                             onOpenRegexPicker = { showRegexPicker = true },
                             onOpenLorebookPicker = { showLorebookPicker = true },
-                            onOpenToolModePicker = { showToolModePicker = true },
                             onNavigateToCharacterDetail = { characterId ->
                                 coroutineScope.launch { settingsDrawerState.close() }
                                 onNavigateToCharacterDetail(characterId)
@@ -338,16 +335,6 @@ fun ChatScreen(
         onDismiss = { showLorebookPicker = false },
     )
 
-    ToolModePickerSheet(
-        visible = showToolModePicker,
-        currentMode = currentToolMode,
-        onSelect = { mode ->
-            viewModel.selectToolMode(mode)
-            showToolModePicker = false
-        },
-        onDismiss = { showToolModePicker = false },
-    )
-
     pendingToolApproval?.let { approval ->
         ToolApprovalDialog(
             displayName = approval.displayName,
@@ -435,20 +422,6 @@ fun ChatScreen(
             },
             onDismiss = { showCharacterPicker = false },
         )
-    }
-}
-
-private fun toolModeSubtitle(
-    currentConversationId: String,
-    currentMode: com.nuttavern.data.tools.ConversationToolMode,
-    newConversationDefaultEnabled: Boolean,
-): String {
-    if (currentConversationId.isBlank()) {
-        return if (newConversationDefaultEnabled) "新会话默认启用" else "新会话默认关闭"
-    }
-    return when (currentMode) {
-        com.nuttavern.data.tools.ConversationToolMode.FORCE_OFF -> "本会话关闭"
-        else -> "本会话启用"
     }
 }
 

@@ -58,6 +58,13 @@ data class ConversationEntity(
     @ColumnInfo(defaultValue = "NULL") val enabledOrphanRegexIds: String? = null,
     @ColumnInfo(defaultValue = "'{}'") val lorebookTimedEffectsJson: String = "{}",
     /**
+     * 当前会话启用的客户端内置工具 id 列表(JSON 数组字符串)。
+     *
+     * 会话创建时从 `LocalToolsSettings.enabledToolIds` 快照写入;之后右侧栏切换工具只改当前会话,
+     * 不影响全局默认。null = 老会话兼容,运行时退回当前默认工具集。
+     */
+    @ColumnInfo(defaultValue = "NULL") val enabledToolIdsJson: String? = null,
+    /**
      * 当前会话的思考量(reasoning effort)。会话级,切会话保留各自档位。
      *
      * 存 [com.nuttavern.data.model.ThinkingLevel] 的序列化字符串(off / auto / effort:LOW /
