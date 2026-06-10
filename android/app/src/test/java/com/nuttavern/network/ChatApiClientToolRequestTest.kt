@@ -6,6 +6,7 @@ import com.nuttavern.data.model.ThinkingLevel
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -112,6 +113,129 @@ class ChatApiClientToolRequestTest {
         assertEquals(2, messages.getJSONObject(0).getJSONArray("content").length())
     }
 
+    @Test
+    fun geminiRequestIncludesLocalToolsAndFunctionResponseParts() {
+        val functionCallParts = JSONArray().put(
+            JSONObject().put(
+                "functionCall",
+                JSONObject()
+                    .put("name", "get_current_time")
+                    .put("args", JSONObject()),
+            ),
+        )
+        val functionResponseParts = JSONArray().put(
+            JSONObject().put(
+                "functionResponse",
+                JSONObject()
+                    .put("name", "get_current_time")
+                    .put("response", JSONObject().put("time", "10:00")),
+            ),
+        )
+
+        val body = JSONObject(
+            buildGeminiRequest(
+                messages = listOf(
+                    ChatMessage(role = "user", content = "现在几点"),
+                    ChatMessage(role = "assistant", content = "", toolCalls = functionCallParts),
+                    ChatMessage(role = "tool", content = "", toolCalls = functionResponseParts),
+                ),
+                tools = listOf(testTool),
+            ),
+        )
+
+        val tools = body.getJSONArray("tools")
+        val functionDeclarations = tools.getJSONObject(0).getJSONArray("functionDeclarations")
+        val declaration = functionDeclarations.getJSONObject(0)
+        assertEquals("get_current_time", declaration.getString("name"))
+        assertEquals("获取设备当前的本地日期和时间", declaration.getString("description"))
+        assertEquals("object", declaration.getJSONObject("parameters").getString("type"))
+
+        val contents = body.getJSONArray("contents")
+        assertEquals("user", contents.getJSONObject(0).getString("role"))
+        assertEquals("model", contents.getJSONObject(1).getString("role"))
+        assertEquals("user", contents.getJSONObject(2).getString("role"))
+        assertEquals("functionCall", contents.getJSONObject(1).getJSONArray("parts").getJSONObject(0).keys().next())
+        val functionResponse = contents.getJSONObject(2).getJSONArray("parts").getJSONObject(0).getJSONObject("functionResponse")
+        assertEquals("get_current_time", functionResponse.getString("name"))
+        assertEquals("10:00", functionResponse.getJSONObject("response").getString("time"))
+    }
+
+    @Test
+    fun geminiFunctionCallIdRoundTripsThroughProducedHistory() {
+        val calls = parseGeminiFunctionCalls(
+            JSONObject().put(
+                "candidates",
+                JSONArray().put(
+                    JSONObject().put(
+                        "content",
+                        JSONObject().put(
+                            "parts",
+                            JSONArray().put(
+                                JSONObject().put(
+                                    "functionCall",
+                                    JSONObject()
+                                        .put("id", "call_123")
+                                        .put("name", "get_current_time")
+                                        .put("args", JSONObject()),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val assistantMessage = buildGeminiAssistantToolCallMessage(calls)
+        val toolMessage = buildGeminiToolResultsMessage(calls.map { it to JSONObject().put("ok", true).toString() })
+        val body = JSONObject(
+            buildGeminiRequest(
+                messages = listOf(assistantMessage, toolMessage),
+                tools = listOf(testTool),
+            ),
+        )
+
+        val contents = body.getJSONArray("contents")
+        val functionCall = contents.getJSONObject(0).getJSONArray("parts").getJSONObject(0).getJSONObject("functionCall")
+        val functionResponse = contents.getJSONObject(1).getJSONArray("parts").getJSONObject(0).getJSONObject("functionResponse")
+        assertEquals("call_123", functionCall.getString("id"))
+        assertEquals("call_123", functionResponse.getString("id"))
+    }
+
+    @Test
+    fun geminiSyntheticFunctionCallIdIsNotSentBackToProvider() {
+        val calls = parseGeminiFunctionCalls(
+            JSONObject().put(
+                "candidates",
+                JSONArray().put(
+                    JSONObject().put(
+                        "content",
+                        JSONObject().put(
+                            "parts",
+                            JSONArray().put(
+                                JSONObject().put(
+                                    "functionCall",
+                                    JSONObject()
+                                        .put("name", "get_current_time")
+                                        .put("args", JSONObject()),
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+        val assistantMessage = buildGeminiAssistantToolCallMessage(calls)
+        val toolMessage = buildGeminiToolResultsMessage(calls.map { it to JSONObject().put("ok", true).toString() })
+        val body = JSONObject(buildGeminiRequest(messages = listOf(assistantMessage, toolMessage), tools = listOf(testTool)))
+
+        val contents = body.getJSONArray("contents")
+        val functionCall = contents.getJSONObject(0).getJSONArray("parts").getJSONObject(0).getJSONObject("functionCall")
+        val functionResponse = contents.getJSONObject(1).getJSONArray("parts").getJSONObject(0).getJSONObject("functionResponse")
+        assertFalse(functionCall.has("id"))
+        assertFalse(functionResponse.has("id"))
+    }
+
     private fun buildOpenAIResponsesRequest(
         messages: List<ChatMessage>,
         tools: List<ChatTool>,
@@ -164,5 +288,49 @@ class ChatApiClientToolRequestTest {
             GenerationParams(streamEnabled = false),
             tools,
         ) as String
+    }
+
+    private fun buildGeminiRequest(
+        messages: List<ChatMessage>,
+        tools: List<ChatTool>,
+    ): String {
+        val method = ChatApiClient::class.java.getDeclaredMethod(
+            "buildGeminiRequest",
+            Model::class.java,
+            List::class.java,
+            String::class.java,
+            ThinkingLevel::class.java,
+            GenerationParams::class.java,
+            List::class.java,
+        )
+        method.isAccessible = true
+        return method.invoke(
+            client,
+            Model(id = "model", modelId = "gemini-test"),
+            messages,
+            null,
+            ThinkingLevel.Auto,
+            GenerationParams(streamEnabled = false),
+            tools,
+        ) as String
+    }
+
+    @Suppress("UNCHECKED_CAST")
+    private fun parseGeminiFunctionCalls(json: JSONObject): List<Any> {
+        val method = ChatApiClient::class.java.getDeclaredMethod("parseGeminiFunctionCalls", JSONObject::class.java)
+        method.isAccessible = true
+        return method.invoke(client, json) as List<Any>
+    }
+
+    private fun buildGeminiAssistantToolCallMessage(calls: List<Any>): ChatMessage {
+        val method = ChatApiClient::class.java.getDeclaredMethod("geminiAssistantToolCallMessage", List::class.java)
+        method.isAccessible = true
+        return method.invoke(client, calls) as ChatMessage
+    }
+
+    private fun buildGeminiToolResultsMessage(results: List<Pair<Any, String>>): ChatMessage {
+        val method = ChatApiClient::class.java.getDeclaredMethod("geminiToolResultsMessage", List::class.java)
+        method.isAccessible = true
+        return method.invoke(client, results) as ChatMessage
     }
 }

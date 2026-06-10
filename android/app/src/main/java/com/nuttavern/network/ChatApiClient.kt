@@ -9,9 +9,7 @@ import com.nuttavern.data.model.ModelAbility
 import com.nuttavern.data.model.Provider
 import com.nuttavern.data.model.ThinkingLevel
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -90,7 +88,10 @@ class ChatApiClient @Inject constructor() {
                     )
                 }
             }
-            is Provider.Google -> streamGoogle(effective, model, messages, systemPrompt, effectiveThinking, generationParams)
+            is Provider.Google -> streamGoogle(
+                effective, model, messages, systemPrompt, effectiveThinking, generationParams,
+                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+            )
             is Provider.Claude -> streamClaude(
                 effective, model, messages, systemPrompt, effectiveThinking, generationParams,
                 activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
@@ -798,73 +799,128 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
-    ): Flow<ChatStreamChunk> = callbackFlow {
-        val jsonBody = buildGeminiRequest(model, messages, systemPrompt, thinkingLevel, generationParams)
+        tools: List<ChatTool>,
+        toolCallRecurseLimit: Int,
+        requireToolApproval: Boolean,
+        approveToolCall: ToolCallApprover?,
+    ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildGeminiStreamUrl(provider.baseUrl, model.modelId)
+        val toolsByName = tools.associateBy { it.name }
+        val conversation = messages.toMutableList()
+        var remainingToolCalls = if (tools.isEmpty()) 0 else toolCallRecurseLimit.coerceAtLeast(0)
 
-        val request = Request.Builder()
-            .url(url)
-            .header("x-goog-api-key", provider.apiKey)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .applyCustomHeaders(model)
-            .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
-            .build()
+        while (true) {
+            val allowTools = remainingToolCalls > 0
+            val jsonBody = buildGeminiRequest(
+                model = model,
+                messages = conversation,
+                systemPrompt = systemPrompt,
+                thinkingLevel = thinkingLevel,
+                generationParams = generationParams,
+                tools = if (allowTools) tools else emptyList(),
+            )
+            val request = Request.Builder()
+                .url(url)
+                .header("x-goog-api-key", provider.apiKey)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .applyCustomHeaders(model)
+                .post(jsonBody.toRequestBody(JSON_MEDIA_TYPE))
+                .build()
+
+            when (val outcome = streamGeminiRound(request, url)) {
+                is OpenAIRoundResult.Failed -> {
+                    send(ChatStreamChunk(content = "", isDone = true, error = outcome.error))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.Completed -> {
+                    send(ChatStreamChunk(content = "", isDone = true))
+                    return@channelFlow
+                }
+                is OpenAIRoundResult.ToolCalls -> {
+                    if (remainingToolCalls <= 0) {
+                        send(
+                            ChatStreamChunk(
+                                content = "",
+                                isDone = true,
+                                error = "tool call limit exceeded for this response",
+                            ),
+                        )
+                        return@channelFlow
+                    }
+                    conversation.add(geminiAssistantToolCallMessage(outcome.calls))
+                    val toolResults = mutableListOf<Pair<LocalToolCall, String>>()
+                    for (call in outcome.calls) {
+                        send(ChatStreamChunk(content = "", toolActivity = call.name))
+                        val result = if (remainingToolCalls > 0) {
+                            remainingToolCalls -= 1
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                        } else {
+                            toolCallLimitExceededResult()
+                        }
+                        toolResults.add(call to result)
+                    }
+                    conversation.add(geminiToolResultsMessage(toolResults))
+                }
+            }
+        }
+    }
+
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<ChatStreamChunk>.streamGeminiRound(
+        request: Request,
+        url: String,
+    ): OpenAIRoundResult = suspendCancellableCoroutine { continuation ->
+        val toolCallsByKey = linkedMapOf<String, LocalToolCall>()
+        val resumed = java.util.concurrent.atomic.AtomicBoolean(false)
+
+        fun finish(result: OpenAIRoundResult) {
+            if (resumed.compareAndSet(false, true)) continuation.resume(result)
+        }
 
         val listener = object : EventSourceListener() {
-            // 与 OpenAI 路径同款"业务完成"标记。详见 streamOpenAI 的注释。
-            private val completed = java.util.concurrent.atomic.AtomicBoolean(false)
-
             override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
                 try {
                     val json = JSONObject(data)
                     val errorMessage = parseGeminiErrorMessage(json)
                     if (errorMessage.isNotBlank()) {
-                        completed.set(true)
-                        trySend(ChatStreamChunk(content = "", isDone = true, error = errorMessage))
                         eventSource.cancel()
+                        finish(OpenAIRoundResult.Failed(errorMessage))
                         return
                     }
                     val chunk = parseGeminiChunk(json)
-                    if (chunk.content.isNotEmpty() || chunk.reasoningContent.isNotEmpty()) {
-                        trySend(chunk)
-                    }
+                    if (chunk.content.isNotEmpty() || chunk.reasoningContent.isNotEmpty()) trySend(chunk)
+                    parseGeminiFunctionCalls(json).forEach { call -> toolCallsByKey[call.id] = call }
                     val finishReason = parseGeminiFinishReason(json)
-                    // Gemini 的 finishReason 取值:STOP / SAFETY / MAX_TOKENS / RECITATION /
-                    // BLOCKLIST / LANGUAGE / OTHER。任意非空都视作终止信号;非 STOP / SAFETY
-                    // 的值要把原因透出给用户,便于排查"答案被截断 / 被安全策略拦截"等场景。
                     if (finishReason.isNotBlank()) {
-                        completed.set(true)
-                        val errorText = mapGeminiFinishReasonToError(finishReason)
-                        trySend(ChatStreamChunk(content = "", isDone = true, error = errorText))
                         eventSource.cancel()
+                        val errorText = mapGeminiFinishReasonToError(finishReason).orEmpty()
+                        when {
+                            errorText.isNotBlank() -> finish(OpenAIRoundResult.Failed(errorText))
+                            toolCallsByKey.isNotEmpty() -> finish(OpenAIRoundResult.ToolCalls(toolCallsByKey.values.toList()))
+                            else -> finish(OpenAIRoundResult.Completed)
+                        }
                     }
                 } catch (_: Exception) {
-                    completed.set(true)
-                    trySend(ChatStreamChunk(content = "", isDone = true, error = "服务返回了无法解析的响应"))
                     eventSource.cancel()
+                    finish(OpenAIRoundResult.Failed("服务返回了无法解析的响应"))
                 }
             }
 
             override fun onClosed(eventSource: EventSource) {
-                if (!completed.get()) {
-                    trySend(ChatStreamChunk(content = "", isDone = true))
-                }
-                close()
+                finish(
+                    if (toolCallsByKey.isNotEmpty()) OpenAIRoundResult.ToolCalls(toolCallsByKey.values.toList())
+                    else OpenAIRoundResult.Completed,
+                )
             }
 
             override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
-                if (completed.get()) {
-                    close()
-                    return
-                }
-                trySend(ChatStreamChunk(content = "", isDone = true, error = buildNetworkErrorMessage(response, t, url)))
-                close()
+                if (resumed.get()) return
+                finish(OpenAIRoundResult.Failed(buildNetworkErrorMessage(response, t, url)))
             }
         }
 
         val eventSource = EventSources.createFactory(client).newEventSource(request, listener)
-        awaitClose { eventSource.cancel() }
+        continuation.invokeOnCancellation { eventSource.cancel() }
     }
 
     // ── JSON builders ─────────────────────────────────
@@ -1333,11 +1389,16 @@ class ChatApiClient @Inject constructor() {
         systemPrompt: String?,
         thinkingLevel: ThinkingLevel,
         generationParams: GenerationParams,
+        tools: List<ChatTool> = emptyList(),
     ): String {
         val contents = JSONArray()
         for (msg in messages) {
             val role = normalizeGeminiRole(msg.role)
             if (role.isBlank()) continue
+            if (msg.toolCalls != null) {
+                contents.put(JSONObject().put("role", role).put("parts", msg.toolCalls))
+                continue
+            }
             val hasContent = msg.content.isNotBlank()
             val hasImages = msg.images.isNotEmpty()
             if (!hasContent && !hasImages) continue
@@ -1393,13 +1454,16 @@ class ChatApiClient @Inject constructor() {
         // generationConfig.responseModalities 表达"也允许图像输出"。
         // 三者都需要 Gemini 2.0+,旧模型会被服务端拒,这是用户配置层面的事,这里不做版本判断。
         val builtInTools = model.builtInTools
-        if (BuiltInTool.Search in builtInTools || BuiltInTool.UrlContext in builtInTools) {
+        if (BuiltInTool.Search in builtInTools || BuiltInTool.UrlContext in builtInTools || tools.isNotEmpty()) {
             val toolEntry = JSONObject()
             if (BuiltInTool.Search in builtInTools) {
                 toolEntry.put("googleSearch", JSONObject())
             }
             if (BuiltInTool.UrlContext in builtInTools) {
                 toolEntry.put("urlContext", JSONObject())
+            }
+            if (tools.isNotEmpty()) {
+                toolEntry.put("functionDeclarations", buildGeminiFunctionDeclarations(tools))
             }
             requestBody.put("tools", JSONArray().put(toolEntry))
         }
@@ -1414,6 +1478,85 @@ class ChatApiClient @Inject constructor() {
         applyCustomBodies(requestBody, model.customBodies)
         return requestBody.toString()
     }
+
+    private fun buildGeminiFunctionDeclarations(tools: List<ChatTool>): JSONArray {
+        val declarations = JSONArray()
+        tools.forEach { tool ->
+            declarations.put(
+                JSONObject()
+                    .put("name", tool.name)
+                    .put("description", tool.description)
+                    .put("parameters", tool.parametersSchema),
+            )
+        }
+        return declarations
+    }
+
+    private fun parseGeminiFunctionCalls(json: JSONObject): List<LocalToolCall> {
+        val parts = json.optJSONArray("candidates")
+            ?.optJSONObject(0)
+            ?.optJSONObject("content")
+            ?.optJSONArray("parts")
+            ?: return emptyList()
+        val calls = mutableListOf<LocalToolCall>()
+        for (index in 0 until parts.length()) {
+            val functionCall = parts.optJSONObject(index)?.optJSONObject("functionCall") ?: continue
+            val name = functionCall.optCleanString("name")
+            if (name.isBlank()) continue
+            val args = functionCall.optJSONObject("args") ?: JSONObject()
+            val id = functionCall.optCleanString("id").ifBlank { "${GEMINI_SYNTHETIC_TOOL_CALL_ID_PREFIX}${index}_${name}_${args}" }
+            calls.add(LocalToolCall(id = id, name = name, arguments = args.toString()))
+        }
+        return calls
+    }
+
+    private fun geminiAssistantToolCallMessage(calls: List<LocalToolCall>): ChatMessage {
+        val parts = JSONArray()
+        calls.forEach { call ->
+            val functionCall = JSONObject()
+                .put("name", call.name)
+                .put("args", parseToolArgumentsForGeminiHistory(call.arguments))
+            if (call.id.isGeminiProviderToolCallId()) functionCall.put("id", call.id)
+            parts.put(
+                JSONObject().put(
+                    "functionCall",
+                    functionCall,
+                ),
+            )
+        }
+        return ChatMessage(role = "assistant", content = "", toolCalls = parts)
+    }
+
+    private fun geminiToolResultsMessage(results: List<Pair<LocalToolCall, String>>): ChatMessage {
+        val parts = JSONArray()
+        results.forEach { (call, result) ->
+            val functionResponse = JSONObject()
+                .put("name", call.name)
+                .put("response", parseToolResultForGeminiHistory(result))
+            if (call.id.isGeminiProviderToolCallId()) functionResponse.put("id", call.id)
+            parts.put(
+                JSONObject().put(
+                    "functionResponse",
+                    functionResponse,
+                ),
+            )
+        }
+        return ChatMessage(role = "tool", content = "", toolCalls = parts)
+    }
+
+    private fun parseToolArgumentsForGeminiHistory(arguments: String): JSONObject = try {
+        if (arguments.isBlank()) JSONObject() else JSONObject(arguments)
+    } catch (_: Exception) {
+        JSONObject()
+    }
+
+    private fun parseToolResultForGeminiHistory(result: String): JSONObject = try {
+        JSONObject(result)
+    } catch (_: Exception) {
+        JSONObject().put("result", result)
+    }
+
+    private fun String.isGeminiProviderToolCallId(): Boolean = isNotBlank() && !startsWith(GEMINI_SYNTHETIC_TOOL_CALL_ID_PREFIX)
 
     /**
      * 把模型自定义 body 字段并入请求体。
@@ -1758,6 +1901,7 @@ class ChatApiClient @Inject constructor() {
         private const val ANTHROPIC_BETA_EXTENDED_CACHE_TTL = "extended-cache-ttl-2025-04-11"
         private const val GEMINI_API_VERSION = "v1beta"
         private const val GEMINI_MODELS_ENDPOINT = "models"
+        private const val GEMINI_SYNTHETIC_TOOL_CALL_ID_PREFIX = "synthetic_gemini_"
         private const val SAFE_ERROR_BODY_LIMIT = 240
 
         /**

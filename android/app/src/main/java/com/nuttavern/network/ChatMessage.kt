@@ -15,7 +15,7 @@ data class ChatMessage(
      *
      * - [toolCalls]:assistant 轮请求模型调用工具时的 provider 原始块。
      *   OpenAI Chat Completions 下是 `tool_calls`,OpenAI Responses 下是 `function_call` input items,
-     *   Claude 下是 `tool_use` content blocks;
+     *   Claude 下是 `tool_use` content blocks,Gemini 下是 `functionCall` / `functionResponse` parts;
      * - [toolCallId]:tool 角色消息对应的 tool id / call_id,把工具结果关联回某次调用。
      */
     val toolCalls: JSONArray? = null,
