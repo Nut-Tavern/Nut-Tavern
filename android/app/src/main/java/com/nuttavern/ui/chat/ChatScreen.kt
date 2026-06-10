@@ -244,6 +244,7 @@ fun ChatScreen(
                         onOpenSettingsDrawer = {
                             coroutineScope.launch { settingsDrawerState.open() }
                         },
+                        toolDisplayName = viewModel::toolDisplayName,
                         onCopyMessage = viewModel::requestCopyMessage,
                         onEditMessage = { message ->
                             editMessage.value = message
@@ -458,6 +459,7 @@ private fun ChatScreenContent(
     onRemoveImage: (String) -> Unit,
     onOpenConversationDrawer: () -> Unit,
     onOpenSettingsDrawer: () -> Unit,
+    toolDisplayName: (String) -> String,
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
@@ -538,6 +540,7 @@ private fun ChatScreenContent(
             shouldShowStreaming = shouldShowStreaming,
             conversationId = currentConversationId,
             innerPadding = innerPadding,
+            toolDisplayName = toolDisplayName,
             modifier = Modifier.fillMaxSize(),
             onCopyMessage = onCopyMessage,
             onEditMessage = onEditMessage,

@@ -61,6 +61,7 @@ import com.composables.icons.lucide.X
 import com.nuttavern.data.model.GeneratedContentSanitizer
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
+import com.nuttavern.data.model.MessagePart
 import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
@@ -70,6 +71,7 @@ import com.nuttavern.ui.components.NutTavernIconRow
 internal fun ChatMessageRow(
     message: Message,
     maxMessageWidth: Dp,
+    toolDisplayName: (String) -> String,
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
@@ -77,18 +79,6 @@ internal fun ChatMessageRow(
 ) {
     val isUserMessage = message.role == "user"
     val alignment = if (isUserMessage) Alignment.CenterEnd else Alignment.CenterStart
-    // 第一批沿用"先思考块再正文"的固定渲染:从 parts 抽出正文文本与思考块。
-    // 有序穿插(groupMessageParts)在第三批接入。
-    val messageText = message.text
-    val visibleContent = if (isUserMessage) {
-        messageText
-    } else {
-        GeneratedContentSanitizer.sanitizeGeneratedDisplayText(messageText)
-    }
-    val reasoningPart = message.reasoning
-    val visibleReasoningContent = reasoningPart
-        ?.let { GeneratedContentSanitizer.sanitizeGeneratedDisplayText(it.text) }
-        .orEmpty()
 
     var actionsSheetVisible by remember(message.id) { mutableStateOf(false) }
     val haptics = LocalHapticFeedback.current
@@ -115,62 +105,18 @@ internal fun ChatMessageRow(
                 bottom = 4.dp,
             ),
     ) {
-        if (!isUserMessage && visibleReasoningContent.isNotBlank()) {
-            // ChatReasoningBlock 自身决定宽度(折叠态非全宽);这里给个外层 padding 让它贴左对齐。
-            ChatReasoningBlock(
-                reasoningContent = visibleReasoningContent,
-                reasoningDurationMillis = reasoningPart?.durationMillis ?: 0L,
-                isStreaming = false,
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-        if (visibleContent.isNotBlank()) {
-            if (isUserMessage) {
-                Box(
-                    modifier = Modifier.fillMaxWidth(),
-                    contentAlignment = alignment,
-                ) {
-                    Surface(
-                        modifier = Modifier
-                            .widthIn(max = maxMessageWidth)
-                            .clip(MaterialTheme.shapes.large)
-                            .then(longPressModifier),
-                        shape = MaterialTheme.shapes.large,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                    ) {
-                        ChatRenderedText(
-                            content = visibleContent,
-                            textStyleRole = ChatRenderedTextRole.Message,
-                            selectable = false,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
-                        )
-                    }
-                }
-            } else {
-                ChatRenderedText(
-                    content = visibleContent,
-                    textStyleRole = ChatRenderedTextRole.Message,
-                    selectable = false,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    renderMarkdown = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .then(longPressModifier)
-                        .padding(top = 12.dp, bottom = 12.dp),
-                )
-            }
-        }
-        // 附件图片放在文字下方,与气泡同侧对齐。点击可全屏放大查看。
-        if (isUserMessage && message.attachments.isNotEmpty()) {
-            if (visibleContent.isNotBlank()) {
-                Spacer(modifier = Modifier.height(4.dp))
-            }
-            MessageAttachmentImages(
-                attachments = message.attachments,
+        if (isUserMessage) {
+            UserMessageContent(
+                message = message,
                 maxMessageWidth = maxMessageWidth,
                 alignment = alignment,
+                longPressModifier = longPressModifier,
+            )
+        } else {
+            AssistantMessageContent(
+                message = message,
+                toolDisplayName = toolDisplayName,
+                longPressModifier = longPressModifier,
             )
         }
     }
@@ -200,13 +146,128 @@ internal fun ChatMessageRow(
 }
 
 /**
+ * 用户消息内容:正文气泡(靠右) + 下方图片附件。用户消息只含 Text part,不会有思考 / 工具块。
+ */
+@Composable
+private fun UserMessageContent(
+    message: Message,
+    maxMessageWidth: Dp,
+    alignment: Alignment,
+    longPressModifier: Modifier,
+) {
+    val visibleContent = message.text
+    if (visibleContent.isNotBlank()) {
+        Box(
+            modifier = Modifier.fillMaxWidth(),
+            contentAlignment = alignment,
+        ) {
+            Surface(
+                modifier = Modifier
+                    .widthIn(max = maxMessageWidth)
+                    .clip(MaterialTheme.shapes.large)
+                    .then(longPressModifier),
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurface,
+            ) {
+                ChatRenderedText(
+                    content = visibleContent,
+                    textStyleRole = ChatRenderedTextRole.Message,
+                    selectable = false,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 12.dp),
+                )
+            }
+        }
+    }
+    // 附件图片放在文字下方,与气泡同侧对齐。点击可全屏放大查看。
+    if (message.attachments.isNotEmpty()) {
+        if (visibleContent.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        MessageAttachmentImages(
+            attachments = message.attachments,
+            maxMessageWidth = maxMessageWidth,
+            alignment = alignment,
+        )
+    }
+}
+
+/**
+ * 助手消息内容:按 [groupMessageParts] 分组后有序渲染——
+ * 连续的思考 / 工具调用聚成时间线块(竖排紧凑卡片),正文 Text 打断成独立 markdown 块。
+ */
+@Composable
+private fun AssistantMessageContent(
+    message: Message,
+    toolDisplayName: (String) -> String,
+    longPressModifier: Modifier,
+) {
+    val blocks = remember(message.parts) { message.parts.groupMessageParts() }
+    blocks.forEachIndexed { index, block ->
+        if (index > 0) {
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        when (block) {
+            is MessagePartBlock.Timeline -> TimelineBlock(
+                steps = block.steps,
+                toolDisplayName = toolDisplayName,
+            )
+            is MessagePartBlock.Body -> {
+                val visibleContent =
+                    GeneratedContentSanitizer.sanitizeGeneratedDisplayText(block.text.text)
+                if (visibleContent.isNotBlank()) {
+                    ChatRenderedText(
+                        content = visibleContent,
+                        textStyleRole = ChatRenderedTextRole.Message,
+                        selectable = false,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        renderMarkdown = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .then(longPressModifier)
+                            .padding(top = 12.dp, bottom = 12.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 时间线块:思考项各自独立成卡,连续的工具调用聚成一张合并折叠卡。
+ * 段与段之间 4dp 间距,共用 surfaceContainerLow 底色形成视觉成组。
+ */
+@Composable
+private fun TimelineBlock(
+    steps: List<MessagePart>,
+    toolDisplayName: (String) -> String,
+) {
+    val segments = remember(steps) { steps.splitTimelineSegments() }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        segments.forEach { segment ->
+            when (segment) {
+                is TimelineSegment.Thinking -> ChatReasoningBlock(
+                    reasoningContent = segment.reasoning.text,
+                    reasoningDurationMillis = segment.reasoning.durationMillis,
+                    isStreaming = false,
+                )
+                is TimelineSegment.ToolGroup -> ChatToolCallGroupBlock(
+                    toolCalls = segment.toolCalls,
+                    toolDisplayName = toolDisplayName,
+                )
+            }
+        }
+    }
+}
+
+/**
  * 用户消息已发送的图片缩略图。横向排列,与气泡同侧对齐(用户消息靠右)。
  * 点击缩略图打开全屏可缩放预览([ImagePreviewDialog])。
  */
 @Composable
 private fun MessageAttachmentImages(
-    attachments: List<ImageAttachment>,
-    maxMessageWidth: Dp,
+    attachments: List<ImageAttachment>,    maxMessageWidth: Dp,
     alignment: Alignment,
 ) {
     var previewPath by remember { mutableStateOf<String?>(null) }

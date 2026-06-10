@@ -152,6 +152,10 @@ class ChatViewModel @Inject constructor(
     /** 注册表里的全部内置工具定义,供右侧栏直接渲染工具卡片。 */
     val chatTools: List<com.nuttavern.network.ChatTool> = chatToolRegistry.tools
 
+    /** 工具 id → 展示名。查不到(已下线工具等)退回原始 id,保证历史消息里的工具卡仍可读。 */
+    fun toolDisplayName(toolName: String): String =
+        chatToolRegistry.toolById(toolName)?.displayName ?: toolName
+
     /** 内置工具配置(各工具默认启用 / 各工具确认),供右侧栏与设置页展示。 */
     val localToolsSettings: StateFlow<com.nuttavern.data.tools.LocalToolsSettings> =
         localToolsRepository.settings.stateIn(
@@ -1085,9 +1089,10 @@ class ChatViewModel @Inject constructor(
         if (normalizedContent.isBlank()) return
 
         val existingMessage = _currentMessages.value.firstOrNull { it.id == messageId } ?: return
-        // 编辑只改正文:保留思考 / 工具调用块,把所有 Text part 合并成用户编辑后的单个 Text。
-        val nonTextParts = existingMessage.parts.filter { it !is MessagePart.Text }
-        val updatedParts = nonTextParts + MessagePart.Text(normalizedContent)
+        // 编辑只改正文,保留思考 / 工具调用块**及其原始位置**:把编辑后的文本写回第一个 Text part 原位,
+        // 删除其余 Text part(编辑框是单一文本框,多段正文合并到首个 Text 的位置)。
+        // 没有 Text part(纯思考 / 工具消息)则在末尾追加一个 Text。
+        val updatedParts = replaceTextParts(existingMessage.parts, normalizedContent)
         val updatedMessage = existingMessage.copy(parts = updatedParts)
 
         viewModelScope.launch {
@@ -1101,6 +1106,26 @@ class ChatViewModel @Inject constructor(
                 messagesByConversationId + (conversationId to nextMessages)
             }
             _currentMessages.value = _messagesByConversationId.value[conversationId].orEmpty()
+        }
+    }
+
+    /**
+     * 把编辑后的正文写回 parts:替换第一个 Text part(保留其原始位置),删除其余 Text part,
+     * 其它块(思考 / 工具)位置不变。没有 Text part 时在末尾追加一个 Text。
+     */
+    private fun replaceTextParts(parts: List<MessagePart>, newText: String): List<MessagePart> {
+        if (parts.none { it is MessagePart.Text }) {
+            return parts + MessagePart.Text(newText)
+        }
+        var textWritten = false
+        return parts.mapNotNull { part ->
+            if (part !is MessagePart.Text) return@mapNotNull part
+            if (textWritten) {
+                null
+            } else {
+                textWritten = true
+                MessagePart.Text(newText)
+            }
         }
     }
 
