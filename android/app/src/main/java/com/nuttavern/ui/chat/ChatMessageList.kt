@@ -220,12 +220,12 @@ private fun ChatMessageListContent(
                 .fillMaxSize()
                 .padding(top = innerPadding.calculateTopPadding()),
             contentPadding = PaddingValues(
-                top = 4.dp,
+                top = 8.dp,
                 // bottomBar 高度 + IME 高度都通过 innerPadding.bottom 喂进来。
                 // 加 4.dp 视觉缓冲,与原实现一致。
                 bottom = innerPadding.calculateBottomPadding() + 4.dp,
             ),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             itemsIndexed(items = messages, key = { _, message -> message.id }) { _, message ->
                 ChatMessageRow(
