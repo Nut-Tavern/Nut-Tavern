@@ -1449,10 +1449,11 @@ class ChatViewModel @Inject constructor(
             characterId = _currentCharacterId.value,
         )
         if (nextConversation == null) {
-            _currentConversationId.value = ""
-            _currentMessages.value = emptyList()
+            // 当前角色没有别的会话了 → 进入与 [selectCharacter] 切到空角色一致的新会话占位态:
+            // 重置 persona / preset / thinkingLevel / 工具,而不是延续被删会话的设置,
+            // 避免同一"角色占位态"出现两种结果。
+            startNewConversationPlaceholder(_currentCharacterId.value)
             refreshVisibleConversationsForCurrentScope()
-            _draft.value = ""
             _isReplying.value = false
             return
         }
