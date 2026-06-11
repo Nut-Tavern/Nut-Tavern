@@ -142,7 +142,7 @@ fun LocalToolsScreen(
                         LocalToolCard(
                             unit = unit,
                             enabledByDefault = unit.isEnabledIn(settings),
-                            approvalRequired = unit.isApprovalRequiredIn(settings),
+                            approvalRequired = unit.isEffectiveApprovalRequiredIn(settings),
                             elevated = isDragging,
                             onClick = { configuringKey = unit.orderKey },
                             dragHandle = {
@@ -166,7 +166,8 @@ fun LocalToolsScreen(
             title = configuring.unitTitle,
             subtitle = configuring.unitSubtitle,
             enabledByDefault = configuring.isEnabledIn(settings),
-            approvalRequired = configuring.isApprovalRequiredIn(settings),
+            approvalRequired = configuring.isUserApprovalRequiredIn(settings),
+            hasForcedApproval = configuring.hasForcedApproval,
             onSetEnabled = { viewModel.setToolsEnabled(configuring.toolIds, it) },
             onSetApprovalRequired = { viewModel.setToolsApprovalRequired(configuring.toolIds, it) },
             onDismiss = { configuringKey = null },
@@ -236,6 +237,7 @@ private fun ToolConfigSheet(
     subtitle: String,
     enabledByDefault: Boolean,
     approvalRequired: Boolean,
+    hasForcedApproval: Boolean,
     onSetEnabled: (Boolean) -> Unit,
     onSetApprovalRequired: (Boolean) -> Unit,
     onDismiss: () -> Unit,
@@ -270,8 +272,12 @@ private fun ToolConfigSheet(
                 NutTavernGroupDivider()
                 NutTavernIconRow(
                     icon = Lucide.Check,
-                    title = "调用前确认",
-                    subtitle = "模型请求调用时先弹窗确认",
+                    title = if (hasForcedApproval) "低风险工具也需确认" else "调用前确认",
+                    subtitle = if (hasForcedApproval) {
+                        "写操作始终强制确认；此开关只控制只读/低风险工具是否也询问"
+                    } else {
+                        "模型请求调用时先弹窗确认"
+                    },
                     onClick = { onSetApprovalRequired(!approvalRequired) },
                     trailing = {
                         NutTavernEntitySwitch(
@@ -289,9 +295,20 @@ private fun ToolConfigSheet(
 private fun ToolUnit.isEnabledIn(settings: LocalToolsSettings): Boolean =
     toolIds.all { it in settings.enabledToolIds }
 
-/** 组内全部工具都需确认才算"需确认"。 */
-private fun ToolUnit.isApprovalRequiredIn(settings: LocalToolsSettings): Boolean =
+/** 用户额外开启的确认:组内全部工具都在设置集合里才算开启。 */
+private fun ToolUnit.isUserApprovalRequiredIn(settings: LocalToolsSettings): Boolean =
     toolIds.all { it in settings.approvalRequiredToolIds }
+
+/** 实际生效确认 = 工具自身强制确认 OR 用户额外确认。 */
+private fun ToolUnit.isEffectiveApprovalRequiredIn(settings: LocalToolsSettings): Boolean =
+    hasForcedApproval || isUserApprovalRequiredIn(settings)
+
+/** 是否包含自身强制确认的工具(例如世界书写工具)。 */
+private val ToolUnit.hasForcedApproval: Boolean
+    get() = when (this) {
+        is ToolUnit.SingleTool -> tool.needsApproval
+        is ToolUnit.Group -> tools.any { it.needsApproval }
+    }
 
 private val ToolUnit.unitTitle: String
     get() = when (this) {

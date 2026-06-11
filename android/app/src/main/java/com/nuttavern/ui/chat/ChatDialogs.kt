@@ -1,6 +1,8 @@
 package com.nuttavern.ui.chat
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -20,6 +22,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.model.Message
+import com.nuttavern.network.ToolApprovalDetails
 
 @Composable
 internal fun RegenerateMessageDialog(
@@ -99,7 +102,11 @@ internal fun RenameConversationDialog(
         onDismissRequest = onDismiss,
         title = { Text("重命名会话", style = MaterialTheme.typography.titleLarge) },
         text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
@@ -161,6 +168,7 @@ internal fun DeleteConversationDialog(
 internal fun ToolApprovalDialog(
     displayName: String,
     argumentsJson: String,
+    details: ToolApprovalDetails? = null,
     onAllow: () -> Unit,
     onDeny: () -> Unit,
 ) {
@@ -173,7 +181,39 @@ internal fun ToolApprovalDialog(
                     text = "模型请求调用「$displayName」。",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                if (argumentsJson.isNotBlank()) {
+                if (details != null) {
+                    if (!details.description.isNullOrBlank()) {
+                        Text(
+                            text = details.description,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                    details.sections.forEach { section ->
+                        Text(
+                            text = section.title,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(top = 10.dp),
+                        )
+                        section.lines.forEach { line ->
+                            Text(
+                                text = "• $line",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(top = 2.dp),
+                            )
+                        }
+                    }
+                    details.warnings.forEach { warning ->
+                        Text(
+                            text = "⚠ $warning",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                } else if (argumentsJson.isNotBlank()) {
                     val displayArgs = if (argumentsJson.length > 200) {
                         argumentsJson.take(200) + "..."
                     } else {

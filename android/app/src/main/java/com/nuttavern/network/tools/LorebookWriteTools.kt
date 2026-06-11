@@ -5,6 +5,8 @@ import com.nuttavern.data.lorebook.LorebookEditHistory
 import com.nuttavern.data.lorebook.LorebookEntry
 import com.nuttavern.data.lorebook.LorebookRepository
 import com.nuttavern.network.ChatTool
+import com.nuttavern.network.ToolApprovalDetails
+import com.nuttavern.network.ToolApprovalSection
 import com.nuttavern.network.ToolContext
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -43,7 +45,10 @@ class LorebookWriteTools @Inject constructor(
             "lorebook_id 必须是当前对话已启用的世界书(可先用 list_session_lorebooks 获取)。",
         parametersSchema = applyEditsSchema(),
         needsApproval = true,
-        group = LorebookReadTools.LOREBOOK_TOOL_GROUP,
+        group = LOREBOOK_WRITE_TOOL_GROUP,
+        approvalDetails = { arguments, context ->
+            buildApplyLorebookEditsApprovalDetails(context.sessionLorebooks, arguments)
+        },
         execute = { arguments, context ->
             applyLorebookEdits(context.sessionLorebooks, arguments)
         },
@@ -68,7 +73,10 @@ class LorebookWriteTools @Inject constructor(
             )
             .put("required", JSONArray().put("lorebook_id")),
         needsApproval = true,
-        group = LorebookReadTools.LOREBOOK_TOOL_GROUP,
+        group = LOREBOOK_WRITE_TOOL_GROUP,
+        approvalDetails = { arguments, context ->
+            buildUndoLorebookEditsApprovalDetails(context.sessionLorebooks, arguments)
+        },
         execute = { arguments, context ->
             undoLorebookEdits(context.sessionLorebooks, arguments)
         },
@@ -106,6 +114,8 @@ class LorebookWriteTools @Inject constructor(
         }
 
         val response = JSONObject()
+            .put("ok", true)
+            .put("tool", TOOL_APPLY_LOREBOOK_EDITS)
             .put("lorebook_id", lorebookId)
             .put("preview", preview)
             // saved 明示是否真正落库,避免模型把 preview dry-run 误读成"已保存"。
@@ -113,20 +123,98 @@ class LorebookWriteTools @Inject constructor(
             .put("applied", plan.appliedJson)
             .put("before_after", plan.beforeAfterJson)
             .put("undo_depth", editHistory.depth(lorebookId))
+        val warnings = JSONArray()
         if (preview) {
-            response.put("note", "这是预览结果，尚未保存。确认无误后用 preview=false 再次调用同样的 edits 才会写入。")
+            val note = "这是预览结果，尚未保存。确认无误后用 preview=false 再次调用同样的 edits 才会写入。"
+            response.put("note", note)
+            warnings.put(JSONObject().put("code", "PREVIEW_NOT_SAVED").put("message", note))
         }
         // 被改动后仍处于禁用态的条目:提示模型/用户它们不会参与本轮注入,改了也"不生效"。
         val disabledTargets = disabledEffectiveUids(plan.resultEntries, plan.appliedJson)
         if (disabledTargets.isNotEmpty()) {
-            response.put("disabled_entry_uids", JSONArray(disabledTargets))
+            val disabledUidsJson = JSONArray(disabledTargets)
+            response.put("disabled_entry_uids", disabledUidsJson)
             response.put(
                 "disabled_note",
                 "uid $disabledTargets 当前为禁用状态，编辑已记录但不会参与对话注入。" +
                     "若需生效，用 set_enabled 启用对应条目。",
             )
+            warnings.put(
+                JSONObject()
+                    .put("code", "DISABLED_ENTRY_NOT_EFFECTIVE")
+                    .put("uids", disabledUidsJson)
+                    .put("message", "这些条目仍为禁用状态，编辑已记录但不会参与对话注入。"),
+            )
         }
+        response.put("warnings", warnings)
         return response.toString()
+    }
+
+    private suspend fun buildApplyLorebookEditsApprovalDetails(
+        sessionLorebooks: List<Lorebook>,
+        arguments: JSONObject,
+    ): ToolApprovalDetails {
+        val lorebookId = arguments.optString("lorebook_id").trim()
+        if (lorebookId.isBlank()) {
+            return ToolApprovalDetails(warnings = listOf("缺少 lorebook_id，调用会被拒绝。"))
+        }
+        val sessionBook = sessionLorebooks.find { it.id == lorebookId }
+            ?: return ToolApprovalDetails(warnings = listOf("世界书不在当前对话已启用集合内：$lorebookId"))
+        val editsArray = arguments.optJSONArray("edits")
+            ?: return ToolApprovalDetails(warnings = listOf("缺少 edits 数组，调用会被拒绝。"))
+        if (editsArray.length() == 0) {
+            return ToolApprovalDetails(warnings = listOf("edits 为空，调用会被拒绝。"))
+        }
+        if (editsArray.length() > MAX_EDITS) {
+            return ToolApprovalDetails(warnings = listOf("一次最多 $MAX_EDITS 条编辑，当前 ${editsArray.length()} 条会被拒绝。"))
+        }
+
+        val latestBook = lorebookRepository.findById(lorebookId).first() ?: sessionBook
+        val plan = planLorebookEdits(latestBook, editsArray)
+        if (plan.error != null) {
+            return ToolApprovalDetails(
+                description = "目标世界书：${latestBook.displayNameForApproval()}",
+                warnings = listOf("编辑计划无效：${plan.error}"),
+            )
+        }
+
+        val diff = buildLorebookEditDiffSections(plan.beforeAfterJson)
+        val disabledTargets = disabledEffectiveUids(plan.resultEntries, plan.appliedJson)
+        val warnings = buildList {
+            if (arguments.optBoolean("preview", false)) {
+                add("这是 preview=true 的预览调用，不会保存到世界书。")
+            }
+            if (disabledTargets.isNotEmpty()) {
+                add("uid $disabledTargets 编辑后仍为禁用状态，不会参与对话注入。")
+            }
+        }
+        return ToolApprovalDetails(
+            description = "目标世界书：${latestBook.displayNameForApproval()}；将执行 ${editsArray.length()} 项编辑。",
+            sections = diff,
+            warnings = warnings,
+        )
+    }
+
+    private fun buildUndoLorebookEditsApprovalDetails(
+        sessionLorebooks: List<Lorebook>,
+        arguments: JSONObject,
+    ): ToolApprovalDetails {
+        val lorebookId = arguments.optString("lorebook_id").trim()
+        if (lorebookId.isBlank()) {
+            return ToolApprovalDetails(warnings = listOf("缺少 lorebook_id，调用会被拒绝。"))
+        }
+        val book = sessionLorebooks.find { it.id == lorebookId }
+        val name = book?.displayNameForApproval() ?: lorebookId
+        return ToolApprovalDetails(
+            description = "将撤销世界书「$name」的上一次工具编辑，并恢复到编辑前的整书条目快照。",
+            sections = listOf(
+                ToolApprovalSection(
+                    title = "回滚范围",
+                    lines = listOf("恢复整本世界书条目列表", "当前可撤销步数：${editHistory.depth(lorebookId)}"),
+                ),
+            ),
+            warnings = if (book == null) listOf("该世界书不在当前对话已启用集合内，调用会被拒绝。") else emptyList(),
+        )
     }
 
     private suspend fun undoLorebookEdits(
@@ -144,9 +232,13 @@ class LorebookWriteTools @Inject constructor(
         lorebookRepository.updateEntries(lorebookId, snapshot)
 
         return JSONObject()
+            .put("ok", true)
+            .put("tool", TOOL_UNDO_LOREBOOK_EDITS)
             .put("lorebook_id", lorebookId)
+            .put("saved", true)
             .put("restored_entry_count", snapshot.size)
             .put("undo_depth", editHistory.depth(lorebookId))
+            .put("warnings", JSONArray())
             .toString()
     }
 
@@ -205,7 +297,11 @@ class LorebookWriteTools @Inject constructor(
     }
 
     private fun errorJson(message: String): String =
-        JSONObject().put("error", message).toString()
+        JSONObject()
+            .put("ok", false)
+            .put("error", message)
+            .put("message", message)
+            .toString()
 
     companion object {
         const val TOOL_APPLY_LOREBOOK_EDITS = "apply_lorebook_edits"
@@ -218,6 +314,13 @@ class LorebookWriteTools @Inject constructor(
 
         /** 一次 apply 的最大操作数,超出拒绝,让模型分批。 */
         private const val MAX_EDITS = 20
+
+        /** 世界书编辑工具分组:允许批量写入 / 撤销,写操作始终强制人工确认。 */
+        val LOREBOOK_WRITE_TOOL_GROUP = com.nuttavern.network.ToolGroup(
+            id = "lorebook_write",
+            displayName = "世界书编辑",
+            description = "允许模型编辑当前对话已启用的世界书条目，写操作始终需要确认",
+        )
     }
 }
 
@@ -381,6 +484,94 @@ private fun entrySummaryJson(entry: LorebookEntry): JSONObject =
         .put("key", JSONArray(entry.key))
         .put("enabled", !entry.disable)
         .put("content", entry.content)
+
+private fun Lorebook.displayNameForApproval(): String = name.ifBlank { id }
+
+/**
+ * 把 before_after JSON 转成确认弹窗使用的可读 diff 预览。
+ *
+ * 目标是接近编程 CLI 的变更预览:新增 / 删除 / 修改 / 启停分组列出,避免用户只能看原始 JSON。
+ */
+internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<ToolApprovalSection> {
+    val created = mutableListOf<String>()
+    val deleted = mutableListOf<String>()
+    val statusChanges = mutableListOf<String>()
+    val modified = mutableListOf<String>()
+
+    for (i in 0 until beforeAfterJson.length()) {
+        val change = beforeAfterJson.optJSONObject(i) ?: continue
+        val uid = change.optInt("uid")
+        val beforeValue = change.opt("before")
+        val afterValue = change.opt("after")
+        val before = beforeValue as? JSONObject
+        val after = afterValue as? JSONObject
+
+        when {
+            beforeValue == JSONObject.NULL && after != null -> {
+                created += "uid=$uid ${entryTitle(after)}；关键词 ${formatJsonArray(after.optJSONArray("key"))}；正文 ${previewText(after.optString("content"))}"
+            }
+            before != null && afterValue == JSONObject.NULL -> {
+                deleted += "uid=$uid ${entryTitle(before)}"
+            }
+            isOnlyEnabledChange(before, after) -> {
+                statusChanges += "uid=$uid：${before!!.optBoolean("enabled")} → ${after!!.optBoolean("enabled")}"
+            }
+            before != null && after != null -> {
+                val lines = changedFieldLines(before, after)
+                if (lines.isEmpty()) {
+                    modified += "uid=$uid ${entryTitle(after)}：无字段变化"
+                } else {
+                    modified += "uid=$uid ${entryTitle(after)}：${lines.joinToString("；")}"
+                }
+            }
+        }
+    }
+
+    return buildList {
+        if (created.isNotEmpty()) add(ToolApprovalSection("新增条目", created))
+        if (modified.isNotEmpty()) add(ToolApprovalSection("修改条目", modified))
+        if (statusChanges.isNotEmpty()) add(ToolApprovalSection("启用状态", statusChanges))
+        if (deleted.isNotEmpty()) add(ToolApprovalSection("删除条目", deleted))
+    }
+}
+
+private fun isOnlyEnabledChange(before: JSONObject?, after: JSONObject?): Boolean {
+    if (before == null || after == null) return false
+    return before.length() == 1 && after.length() == 1 && before.has("enabled") && after.has("enabled")
+}
+
+private fun changedFieldLines(before: JSONObject, after: JSONObject): List<String> {
+    val fields = listOf("comment", "key", "enabled", "content")
+    return fields.mapNotNull { field ->
+        val beforeText = jsonValueForPreview(before, field)
+        val afterText = jsonValueForPreview(after, field)
+        if (beforeText == afterText) null else "$field: $beforeText → $afterText"
+    }
+}
+
+private fun jsonValueForPreview(json: JSONObject, field: String): String = when (field) {
+    "key" -> formatJsonArray(json.optJSONArray(field))
+    "content" -> previewText(json.optString(field))
+    else -> json.opt(field)?.toString()?.ifBlank { "(空)" } ?: "(缺失)"
+}
+
+private fun entryTitle(entryJson: JSONObject): String {
+    val comment = entryJson.optString("comment").ifBlank { "未命名条目" }
+    return "「$comment」"
+}
+
+private fun formatJsonArray(array: JSONArray?): String {
+    if (array == null || array.length() == 0) return "[]"
+    return (0 until array.length()).joinToString(prefix = "[", postfix = "]") { index ->
+        array.optString(index)
+    }
+}
+
+private fun previewText(text: String, limit: Int = 48): String {
+    val normalized = text.replace(Regex("\\s+"), " ").trim()
+    if (normalized.isBlank()) return "(空)"
+    return if (normalized.length <= limit) normalized else normalized.take(limit) + "..."
+}
 
 /**
  * 找出被 create / update 触碰、但结果仍处于禁用态的条目 uid。

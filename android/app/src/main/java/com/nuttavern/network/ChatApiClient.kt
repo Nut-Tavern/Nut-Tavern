@@ -461,7 +461,10 @@ class ChatApiClient @Inject constructor() {
             )
         }
         if (approvalRequired && approveToolCall != null) {
-            val approved = approveToolCall.invoke(tool.displayName, tool.name, arguments.toString())
+            val approvalDetails = runCatching {
+                tool.approvalDetails?.invoke(arguments, toolContext)
+            }.getOrNull()
+            val approved = approveToolCall.invoke(tool.displayName, tool.name, arguments.toString(), approvalDetails)
             if (!approved) {
                 return ToolExecutionResult(
                     JSONObject().put("error", "用户拒绝了本次工具调用").toString(),

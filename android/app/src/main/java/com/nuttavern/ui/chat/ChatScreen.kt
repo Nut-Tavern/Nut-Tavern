@@ -351,6 +351,7 @@ fun ChatScreen(
         ToolApprovalDialog(
             displayName = approval.displayName,
             argumentsJson = approval.argumentsJson,
+            details = approval.details,
             onAllow = { viewModel.resolveToolApproval(true) },
             onDeny = { viewModel.resolveToolApproval(false) },
         )

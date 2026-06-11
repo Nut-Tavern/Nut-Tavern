@@ -45,6 +45,7 @@ interface ToolContext {
  * @property group 工具分组。同一 [ToolGroup] 下的工具在内置工具选择 UI 里合并成一张卡、用一个总开关
  *   一起启用 / 禁用(底层会话启用集仍按工具 id 存,组开关只是把组内 id 一起增删)。null = 不分组,
  *   单独成卡(如 get_current_time)。
+ * @property approvalDetails 高风险工具在人工确认弹窗里展示的可读摘要。返回 null 时 UI 退回展示原始参数。
  * @property execute 执行体。入参是模型给出的实参(解析后的 JSON,无参数时为空对象)与会话上下文
  *   [ToolContext],返回纯文本结果。无依赖工具可忽略 context 参数。
  */
@@ -56,7 +57,25 @@ data class ChatTool(
     val parametersSchema: JSONObject,
     val needsApproval: Boolean = false,
     val group: ToolGroup? = null,
+    val approvalDetails: (suspend (arguments: JSONObject, context: ToolContext) -> ToolApprovalDetails?)? = null,
     val execute: suspend (arguments: JSONObject, context: ToolContext) -> String,
+)
+
+/**
+ * 工具确认弹窗可读摘要。
+ *
+ * 用于替代直接展示大段 JSON 参数。工具仍会把原始 JSON 作为兜底展示,摘要只负责让用户确认时能看懂
+ * "将做什么"。
+ */
+data class ToolApprovalDetails(
+    val description: String? = null,
+    val sections: List<ToolApprovalSection> = emptyList(),
+    val warnings: List<String> = emptyList(),
+)
+
+data class ToolApprovalSection(
+    val title: String,
+    val lines: List<String>,
 )
 
 /**
@@ -79,6 +98,12 @@ data class ToolGroup(
  *
  * @param displayName 工具中文名(展示用)
  * @param toolName 工具函数名
- * @param argumentsJson 模型给出的实参 JSON 字符串(展示用)
+ * @param argumentsJson 模型给出的实参 JSON 字符串(兜底展示用)
+ * @param details 工具提供的可读确认摘要;为空时 UI 退回显示 argumentsJson
  */
-typealias ToolCallApprover = suspend (displayName: String, toolName: String, argumentsJson: String) -> Boolean
+typealias ToolCallApprover = suspend (
+    displayName: String,
+    toolName: String,
+    argumentsJson: String,
+    details: ToolApprovalDetails?,
+) -> Boolean

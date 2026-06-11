@@ -211,4 +211,31 @@ class LorebookWriteToolsTest {
         assertNull(plan.error)
         assertEquals(listOf(2), disabledEffectiveUids(plan.resultEntries, plan.appliedJson))
     }
+
+    @Test
+    fun buildLorebookEditDiffSections_groupsCreateUpdateStatusAndDelete() {
+        val plan = planLorebookEdits(
+            book,
+            edits(
+                JSONObject().put("op", "create").put(
+                    "entry",
+                    JSONObject().put("comment", "海港").put("key", JSONArray().put("海港")).put("content", "海港正文"),
+                ),
+                JSONObject().put("op", "update").put("uid", 0).put(
+                    "patch",
+                    JSONObject().put("content", "新王都正文"),
+                ),
+                JSONObject().put("op", "set_enabled").put("uid", 1).put("enabled", true),
+                JSONObject().put("op", "delete").put("uid", 0),
+            ),
+        )
+        assertNull(plan.error)
+
+        val sections = buildLorebookEditDiffSections(plan.beforeAfterJson)
+        val titles = sections.map { it.title }
+        assertTrue("应包含新增条目分组", "新增条目" in titles)
+        assertTrue("应包含修改条目分组", "修改条目" in titles)
+        assertTrue("应包含启用状态分组", "启用状态" in titles)
+        assertTrue("应包含删除条目分组", "删除条目" in titles)
+    }
 }

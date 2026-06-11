@@ -123,4 +123,21 @@ class LorebookReadToolsTest {
         assertFalse(toolByName(LorebookReadTools.TOOL_LIST_SESSION_LOREBOOKS).needsApproval)
         assertFalse(toolByName(LorebookReadTools.TOOL_READ_LOREBOOK_ENTRY).needsApproval)
     }
+
+    @Test
+    fun readOnlyTools_useReadOnlyGroup() {
+        assertEquals("lorebook_read", toolByName(LorebookReadTools.TOOL_LIST_SESSION_LOREBOOKS).group?.id)
+        assertEquals("lorebook_read", toolByName(LorebookReadTools.TOOL_READ_LOREBOOK_ENTRY).group?.id)
+    }
+
+    @Test
+    fun readOnlyTools_returnProtocolEnvelope() = runBlocking {
+        val result = JSONObject(
+            toolByName(LorebookReadTools.TOOL_LIST_SESSION_LOREBOOKS)
+                .execute(JSONObject(), context(listOf(eldoria))),
+        )
+        assertTrue(result.getBoolean("ok"))
+        assertEquals(LorebookReadTools.TOOL_LIST_SESSION_LOREBOOKS, result.getString("tool"))
+        assertTrue(result.has("warnings"))
+    }
 }

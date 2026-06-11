@@ -1078,10 +1078,10 @@ class ChatViewModel @Inject constructor(
      * 关闭也能被拦截。
      */
     private fun buildToolApprover(): com.nuttavern.network.ToolCallApprover {
-        return { displayName, toolName, argumentsJson ->
+        return { displayName, toolName, argumentsJson, details ->
             val deferred = kotlinx.coroutines.CompletableDeferred<Boolean>()
             toolApprovalDeferred = deferred
-            _pendingToolApproval.value = PendingToolApproval(displayName, toolName, argumentsJson)
+            _pendingToolApproval.value = PendingToolApproval(displayName, toolName, argumentsJson, details)
             try {
                 deferred.await()
             } finally {
@@ -2258,4 +2258,5 @@ data class PendingToolApproval(
     val displayName: String,
     val toolName: String,
     val argumentsJson: String,
+    val details: com.nuttavern.network.ToolApprovalDetails? = null,
 )

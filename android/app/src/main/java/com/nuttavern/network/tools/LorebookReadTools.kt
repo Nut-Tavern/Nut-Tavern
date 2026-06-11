@@ -46,7 +46,7 @@ class LorebookReadTools @Inject constructor() {
                 ),
             ),
         needsApproval = false,
-        group = LOREBOOK_TOOL_GROUP,
+        group = LOREBOOK_READ_TOOL_GROUP,
         execute = { arguments, context ->
             val query = arguments.optString("query").trim()
             listSessionLorebooks(context.sessionLorebooks, query)
@@ -79,7 +79,7 @@ class LorebookReadTools @Inject constructor() {
             )
             .put("required", JSONArray().put("lorebook_id").put("uid")),
         needsApproval = false,
-        group = LOREBOOK_TOOL_GROUP,
+        group = LOREBOOK_READ_TOOL_GROUP,
         execute = { arguments, context ->
             readLorebookEntry(context.sessionLorebooks, arguments)
         },
@@ -105,7 +105,12 @@ class LorebookReadTools @Inject constructor() {
                     .put("entries", entriesJson),
             )
         }
-        return JSONObject().put("lorebooks", lorebooksJson).toString()
+        return JSONObject()
+            .put("ok", true)
+            .put("tool", TOOL_LIST_SESSION_LOREBOOKS)
+            .put("lorebooks", lorebooksJson)
+            .put("warnings", JSONArray())
+            .toString()
     }
 
     private fun readLorebookEntry(sessionLorebooks: List<Lorebook>, arguments: JSONObject): String {
@@ -127,9 +132,12 @@ class LorebookReadTools @Inject constructor() {
             ?: return errorJson("entry not found: uid=$uid in lorebook=$lorebookId")
 
         return JSONObject()
+            .put("ok", true)
+            .put("tool", TOOL_READ_LOREBOOK_ENTRY)
             .put("lorebook_id", book.id)
             .put("lorebook_name", book.name)
             .put("entry", entryFullJson(entry))
+            .put("warnings", JSONArray())
             .toString()
     }
 
@@ -174,18 +182,26 @@ class LorebookReadTools @Inject constructor() {
             .put("depth", entry.depth)
 
     private fun errorJson(message: String): String =
-        JSONObject().put("error", message).toString()
+        JSONObject()
+            .put("ok", false)
+            .put("error", message)
+            .put("message", message)
+            .toString()
 
     companion object {
         const val TOOL_LIST_SESSION_LOREBOOKS = "list_session_lorebooks"
         const val TOOL_READ_LOREBOOK_ENTRY = "read_lorebook_entry"
 
-        /** 世界书工具分组:列书 / 读条目(后续写工具也归入此组),UI 合并成一张卡用一个总开关管理。 */
-        val LOREBOOK_TOOL_GROUP = ToolGroup(
-            id = "lorebook",
-            displayName = "世界书",
-            description = "让模型查看、检索并编辑当前对话已启用的世界书条目",
+        /** 世界书只读工具分组:只列书 / 读条目,不提供写权限。 */
+        val LOREBOOK_READ_TOOL_GROUP = ToolGroup(
+            id = "lorebook_read",
+            displayName = "世界书只读",
+            description = "让模型查看、检索当前对话已启用的世界书条目，不允许修改",
         )
+
+        /** 旧字段名兼容:后续新代码应使用 [LOREBOOK_READ_TOOL_GROUP]。 */
+        @Deprecated("Use LOREBOOK_READ_TOOL_GROUP instead")
+        val LOREBOOK_TOOL_GROUP: ToolGroup = LOREBOOK_READ_TOOL_GROUP
 
         /** 列表摘要里正文预览的截断长度。 */
         private const val CONTENT_PREVIEW_LENGTH = 80
