@@ -48,6 +48,7 @@ import com.composables.icons.lucide.ArrowDown
 import com.composables.icons.lucide.Lucide
 import com.nuttavern.data.model.Message
 import com.nuttavern.ui.components.EmptyState
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -217,6 +218,17 @@ private fun ChatMessageListContent(
     // 这条路径不依赖 isAtBottom,也不依赖 index,与 IME 动画同帧。
     ImeLazyListAutoScroller(listState)
 
+    // 进入 / 切换会话时(外层 key(conversationId) 重建本 Composable + listState 归零),
+    // 等首批消息测量出 item 后,无动画跳到末尾,让历史会话默认停在最后一句而非回到顶部。只做一次。
+    var hasScrolledToInitialBottom by remember { mutableStateOf(false) }
+    LaunchedEffect(totalItemCount) {
+        if (hasScrolledToInitialBottom || totalItemCount == 0) return@LaunchedEffect
+        snapshotFlow { listState.layoutInfo.totalItemsCount }
+            .first { it > 0 }
+        listState.scrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
+        hasScrolledToInitialBottom = true
+    }
+
     // 列表级一次性淡入:进对话 / 切会话 / 开屏时整列表淡入一次。
     // 放在列表容器上(而非每条消息)是关键 —— per-item 动画会随 LazyColumn 回收复用重播,
     // 往上翻历史时每条又淡一遍;容器级只在本 Composable 首次组合时播一次。
@@ -287,7 +299,7 @@ private fun ChatMessageListContent(
                 onClick = {
                     if (totalItemCount == 0) return@SmallFloatingActionButton
                     coroutineScope.launch {
-                        listState.animateScrollToItem(listState.layoutInfo.totalItemsCount)
+                        listState.animateScrollToItem((listState.layoutInfo.totalItemsCount - 1).coerceAtLeast(0))
                     }
                 },
                 containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,

@@ -1,6 +1,8 @@
 package com.nuttavern.ui.chat
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
@@ -10,10 +12,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.BottomSheetDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +31,7 @@ import androidx.compose.ui.text.input.ImeAction
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.model.Message
 import com.nuttavern.network.ToolApprovalDetails
+import com.nuttavern.ui.components.NutTavernSheetTitle
 
 @Composable
 internal fun RegenerateMessageDialog(
@@ -163,9 +170,10 @@ internal fun DeleteConversationDialog(
 /**
  * 模型调用内置工具前的人工确认弹窗。
  *
- * 仅在对应工具开启"调用前确认"或工具自身标记高风险时弹出。点外部不可关闭(onDismissRequest 等同拒绝),
- * 避免误触把挂起的工具调用悬空。允许=放行本次调用,拒绝=回灌错误让模型转向用户解释。
+ * 仅在对应工具开启"调用前确认"或工具自身标记高风险时弹出。底部抽屉与"工具调用详情"统一样式,内容可上下滚动。
+ * 点外部 / 下滑关闭等同拒绝(onDismissRequest = onDeny),避免误触把挂起的工具调用悬空。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ToolApprovalDialog(
     displayName: String,
@@ -174,59 +182,65 @@ internal fun ToolApprovalDialog(
     onAllow: () -> Unit,
     onDeny: () -> Unit,
 ) {
-    AlertDialog(
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
         onDismissRequest = onDeny,
-        title = { Text("允许调用工具？", style = MaterialTheme.typography.titleLarge) },
-        text = {
-            Column(modifier = Modifier.fillMaxWidth()) {
-                Text(
-                    text = "模型请求调用「$displayName」。",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                if (details != null) {
-                    if (!details.description.isNullOrBlank()) {
-                        Text(
-                            text = details.description,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
-                    if (details.diffs.isNotEmpty()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        ToolDiffPreview(diffs = details.diffs)
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    details.warnings.forEach { warning ->
-                        Text(
-                            text = "⚠ $warning",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.padding(top = 8.dp),
-                        )
-                    }
-                } else if (argumentsJson.isNotBlank()) {
-                    val displayArgs = if (argumentsJson.length > 200) {
-                        argumentsJson.take(200) + "..."
-                    } else {
-                        argumentsJson
-                    }
+        sheetState = sheetState,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+                .verticalScroll(rememberScrollState()),
+        ) {
+            NutTavernSheetTitle(
+                title = "允许调用工具？",
+                description = "模型请求调用「$displayName」。",
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            if (details != null) {
+                if (!details.description.isNullOrBlank()) {
                     Text(
-                        text = "参数: $displayArgs",
+                        text = details.description,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 8.dp)
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                if (details.diffs.isNotEmpty()) {
+                    ToolDiffPreview(diffs = details.diffs)
+                    Spacer(modifier = Modifier.height(12.dp))
+                }
+                details.warnings.forEach { warning ->
+                    Text(
+                        text = "⚠ $warning",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 8.dp),
                     )
                 }
+            } else if (argumentsJson.isNotBlank()) {
+                Text(
+                    text = "参数: $argumentsJson",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onAllow) { Text("允许") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDeny) {
-                Text("拒绝", color = MaterialTheme.colorScheme.error)
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+            ) {
+                TextButton(onClick = onDeny) {
+                    Text("拒绝", color = MaterialTheme.colorScheme.error)
+                }
+                TextButton(onClick = onAllow) { Text("允许") }
             }
-        },
-    )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+    }
 }

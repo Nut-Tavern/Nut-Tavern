@@ -69,14 +69,59 @@ data class ChatTool(
  */
 data class ToolApprovalDetails(
     val description: String? = null,
-    val sections: List<ToolApprovalSection> = emptyList(),
+    val diffs: List<ToolDiffEntry> = emptyList(),
     val warnings: List<String> = emptyList(),
 )
 
-data class ToolApprovalSection(
+/** 差异类型:新增/删除/修改/状态变更等。 */
+enum class ToolDiffType { ADDED, DELETED, MODIFIED, STATUS }
+
+/** 一条结构化的变更记录。 */
+data class ToolDiffEntry(
     val title: String,
-    val lines: List<String>,
+    val type: ToolDiffType,
+    val fields: List<ToolDiffField> = emptyList(),
 )
+
+/**
+ * 一个字段的变更详情:行级 diff 切出的若干 hunk。
+ *
+ * 对齐 unified diff:不连续的改动各自成 hunk,hunk 之间(以及首尾)有被省略的行时渲染省略标记。
+ *
+ * @property hunks 该字段的差异块列表;字段无变化时为空。
+ * @property hasTrailingGap 最后一个 hunk 之后还有被省略的行(渲染底部省略标记)。
+ */
+data class ToolDiffField(
+    val name: String,
+    val hunks: List<DiffHunk>,
+    val hasTrailingGap: Boolean = false,
+)
+
+/**
+ * 一段连续差异块。改动行及其前后若干上下文行聚成一块。
+ *
+ * @property precededByGap 该 hunk 之前还有被省略的行(渲染顶部省略标记)。
+ */
+data class DiffHunk(
+    val lines: List<DiffLine>,
+    val precededByGap: Boolean = false,
+)
+
+/**
+ * hunk 内的一行。
+ *
+ * @property kind 行类型:上下文 / 删除 / 新增。
+ * @property oldLineNumber 修改前文本中的行号(1 起);新增行为 null。
+ * @property newLineNumber 修改后文本中的行号(1 起);删除行为 null。
+ */
+data class DiffLine(
+    val kind: DiffLineKind,
+    val oldLineNumber: Int?,
+    val newLineNumber: Int?,
+    val text: String,
+)
+
+enum class DiffLineKind { CONTEXT, REMOVED, ADDED }
 
 /**
  * 工具分组。用于内置工具选择 UI 把同类工具合并成一张卡、一个总开关管理。

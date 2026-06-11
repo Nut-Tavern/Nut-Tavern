@@ -32,7 +32,7 @@ import com.nuttavern.ui.viewmodel.LorebookViewModel
 /**
  * 右侧栏的"世界书选择"抽屉。
  *
- * 暂存 Switch 状态,只有点"应用"才写入 globalSelectedIds。
+ * 暂存 Switch 状态,只有点"应用"才写回当前会话的世界书选择。
  * 下滑/点外部关闭 = 取消修改。
  * 卡片无左侧图标,Switch 左侧有编辑键,点击后导航到世界书详情页。
  */
@@ -40,6 +40,7 @@ import com.nuttavern.ui.viewmodel.LorebookViewModel
 @Composable
 fun LorebookPickerSheet(
     visible: Boolean,
+    selectedIds: Set<String>,
     onApply: (selectedIds: Set<String>) -> Unit,
     onEdit: (lorebookId: String) -> Unit,
     onDismiss: () -> Unit,
@@ -48,11 +49,10 @@ fun LorebookPickerSheet(
     if (!visible) return
 
     val lorebooks by viewModel.lorebooks.collectAsState()
-    val globalSelectedIds by viewModel.globalSelectedIds.collectAsState()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // 暂存选中状态
-    var selectedIds by remember(visible) { mutableStateOf(globalSelectedIds.toSet()) }
+    var draftSelectedIds by remember(visible, selectedIds) { mutableStateOf(selectedIds) }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -70,7 +70,7 @@ fun LorebookPickerSheet(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 NutTavernSheetTitle(title = "世界书", modifier = Modifier.weight(1f))
-                TextButton(onClick = { onApply(selectedIds) }) { Text("应用") }
+                TextButton(onClick = { onApply(draftSelectedIds) }) { Text("应用") }
             }
 
             if (lorebooks.isEmpty()) {
@@ -93,10 +93,10 @@ fun LorebookPickerSheet(
                         MultiSelectPickerCard(
                             title = book.name.ifBlank { "未命名世界书" },
                             subtitle = if (entryCount == 0) "暂无条目" else "共 $entryCount 个条目",
-                            enabled = book.id in selectedIds,
+                            enabled = book.id in draftSelectedIds,
                             onToggle = { enabled ->
-                                selectedIds = if (enabled) selectedIds + book.id
-                                else selectedIds - book.id
+                                draftSelectedIds = if (enabled) draftSelectedIds + book.id
+                                else draftSelectedIds - book.id
                             },
                             onEdit = { onEdit(book.id) },
                         )

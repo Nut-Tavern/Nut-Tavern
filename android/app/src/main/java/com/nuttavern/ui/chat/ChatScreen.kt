@@ -88,6 +88,7 @@ fun ChatScreen(
     val currentToolActivity by viewModel.currentToolActivity.collectAsState()
     val pendingToolApproval by viewModel.pendingToolApproval.collectAsState()
     val currentEnabledToolIds by viewModel.currentEnabledToolIds.collectAsState()
+    val currentEnabledLorebookIds by viewModel.currentEnabledLorebookIds.collectAsState()
     val localToolsSettings by viewModel.localToolsSettings.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
@@ -323,6 +324,7 @@ fun ChatScreen(
 
     com.nuttavern.ui.lorebook.LorebookPickerSheet(
         visible = showLorebookPicker,
+        selectedIds = currentEnabledLorebookIds,
         onApply = { selectedIds ->
             viewModel.updateLorebookSelection(selectedIds)
             showLorebookPicker = false

@@ -5,6 +5,9 @@ import com.nuttavern.data.lorebook.LorebookEditHistory
 import com.nuttavern.data.lorebook.LorebookEntry
 import com.nuttavern.data.lorebook.LorebookRepository
 import com.nuttavern.network.ChatTool
+import com.nuttavern.network.DiffHunk
+import com.nuttavern.network.DiffLine
+import com.nuttavern.network.DiffLineKind
 import com.nuttavern.network.ToolApprovalDetails
 import com.nuttavern.network.ToolDiffEntry
 import com.nuttavern.network.ToolDiffField
@@ -213,7 +216,7 @@ class LorebookWriteTools @Inject constructor(
                 ToolDiffEntry(
                     title = "恢复整本世界书条目列表",
                     type = ToolDiffType.STATUS,
-                    fields = listOf(ToolDiffField("当前可撤销步数", null, editHistory.depth(lorebookId).toString())),
+                    fields = listOf(buildDiffField("当前可撤销步数", null, editHistory.depth(lorebookId).toString())),
                 ),
             ),
             warnings = if (book == null) listOf("该世界书不在当前对话已启用集合内，调用会被拒绝。") else emptyList(),
@@ -485,7 +488,9 @@ private fun entrySummaryJson(entry: LorebookEntry): JSONObject =
         .put("uid", entry.uid)
         .put("comment", entry.comment)
         .put("key", JSONArray(entry.key))
+        .put("keysecondary", JSONArray(entry.keysecondary))
         .put("enabled", !entry.disable)
+        .put("order", entry.order)
         .put("content", entry.content)
 
 private fun Lorebook.displayNameForApproval(): String = name.ifBlank { id }
@@ -512,8 +517,11 @@ internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<Too
                     title = "uid=$uid ${entryTitle(after)}",
                     type = ToolDiffType.ADDED,
                     fields = listOf(
-                        ToolDiffField("关键词", null, formatJsonArray(after.optJSONArray("key"))),
-                        ToolDiffField("正文", null, previewText(after.optString("content"))),
+                        buildDiffField("关键词", null, formatJsonArray(after.optJSONArray("key"))),
+                        buildDiffField("次要关键词", null, formatJsonArray(after.optJSONArray("keysecondary"))),
+                        buildDiffField("启用状态", null, after.optBoolean("enabled").toString()),
+                        buildDiffField("排序权重", null, after.optInt("order").toString()),
+                        buildDiffField("正文", null, after.optString("content")),
                     ),
                 )
             }
@@ -521,6 +529,13 @@ internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<Too
                 diffs += ToolDiffEntry(
                     title = "uid=$uid ${entryTitle(before)}",
                     type = ToolDiffType.DELETED,
+                    fields = listOf(
+                        buildDiffField("关键词", formatJsonArray(before.optJSONArray("key")), null),
+                        buildDiffField("次要关键词", formatJsonArray(before.optJSONArray("keysecondary")), null),
+                        buildDiffField("启用状态", before.optBoolean("enabled").toString(), null),
+                        buildDiffField("排序权重", before.optInt("order").toString(), null),
+                        buildDiffField("正文", before.optString("content"), null),
+                    ),
                 )
             }
             isOnlyEnabledChange(before, after) -> {
@@ -528,7 +543,7 @@ internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<Too
                     title = "uid=$uid ${entryTitle(after!!)}",
                     type = ToolDiffType.STATUS,
                     fields = listOf(
-                        ToolDiffField(
+                        buildDiffField(
                             name = "启用状态",
                             before = before!!.optBoolean("enabled").toString(),
                             after = after.optBoolean("enabled").toString(),
@@ -556,65 +571,211 @@ private fun isOnlyEnabledChange(before: JSONObject?, after: JSONObject?): Boolea
 }
 
 private fun changedFields(before: JSONObject, after: JSONObject): List<ToolDiffField> {
-    val fields = listOf("comment", "key", "enabled", "content")
-    return fields.mapNotNull { field ->
-        if (field == "content") {
-            val beforeText = before.optString(field)
-            val afterText = after.optString(field)
-            if (beforeText == afterText) return@mapNotNull null
-            val (previewBefore, previewAfter) = extractDiffContext(beforeText, afterText)
-            ToolDiffField(field, previewBefore, previewAfter)
-        } else {
-            val beforeText = jsonValueForPreview(before, field)
-            val afterText = jsonValueForPreview(after, field)
-            if (beforeText == afterText) null else ToolDiffField(field, beforeText, afterText)
+    return listOf("comment", "key", "keysecondary", "enabled", "order", "content").mapNotNull { field ->
+        val beforeText = fieldText(before, field)
+        val afterText = fieldText(after, field)
+        if (beforeText == afterText) null
+        else buildDiffField(fieldDisplayName(field), beforeText, afterText)
+    }
+}
+
+/** 取字段的可读文本值。content 保留换行用于行级 diff,其余字段为单行。 */
+private fun fieldText(json: JSONObject, field: String): String = when (field) {
+    "key" -> formatJsonArray(json.optJSONArray(field))
+    "keysecondary" -> formatJsonArray(json.optJSONArray(field))
+    "content" -> json.optString(field)
+    "enabled" -> json.optBoolean(field).toString()
+    "order" -> json.optInt(field).toString()
+    else -> json.optString(field).ifBlank { "(空)" }
+}
+
+/** 条目字段的中文显示名,与新增/删除/状态卡片的字段名保持一致。 */
+private fun fieldDisplayName(field: String): String = when (field) {
+    "comment" -> "条目名称"
+    "key" -> "关键词"
+    "keysecondary" -> "次要关键词"
+    "enabled" -> "启用状态"
+    "order" -> "排序权重"
+    "content" -> "正文"
+    else -> field
+}
+
+/**
+ * 构造一个字段的行级 diff。
+ *
+ * - [before] 为 null:整段新增,所有行标记 ADDED。
+ * - [after] 为 null:整段删除,所有行标记 REMOVED。
+ * - 两者都有:按行做 LCS 比对,改动行及其前后各 [DIFF_CONTEXT_LINES] 行上下文聚成 hunk,
+ *   不连续的改动各自成 hunk(对齐 unified diff)。
+ */
+internal fun buildDiffField(name: String, before: String?, after: String?): ToolDiffField {
+    if (before != null && after != null && shouldUseSummaryDiff(before, after)) {
+        return buildSummaryDiffField(name, before, after)
+    }
+    if (before == null && after != null && shouldUseOneSidedSummary(after)) {
+        return buildOneSidedSummaryDiffField(name, DiffLineKind.ADDED, after)
+    }
+    if (before != null && after == null && shouldUseOneSidedSummary(before)) {
+        return buildOneSidedSummaryDiffField(name, DiffLineKind.REMOVED, before)
+    }
+
+    val ops = when {
+        before == null && after != null -> buildOneSidedDiffLines(DiffLineKind.ADDED, after)
+        before != null && after == null -> buildOneSidedDiffLines(DiffLineKind.REMOVED, before)
+        before != null && after != null -> diffLines(before.split("\n"), after.split("\n"))
+        else -> emptyList()
+    }
+    val (hunks, trailingGap) = splitIntoHunks(ops, DIFF_CONTEXT_LINES)
+    return ToolDiffField(name, hunks, trailingGap)
+}
+
+/** diff hunk 改动行前后保留的上下文行数。 */
+private const val DIFF_CONTEXT_LINES = 3
+
+/** LCS 的时间/内存是 O(n*m),超过这些阈值就降级成摘要 diff,避免确认弹窗卡顿。 */
+private const val MAX_LCS_LINE_PRODUCT = 40_000
+private const val MAX_LCS_TOTAL_CHARS = 80_000
+private const val SUMMARY_PREVIEW_LINES = 8
+private const val SUMMARY_PREVIEW_CHARS = 2_000
+
+private fun shouldUseSummaryDiff(before: String, after: String): Boolean {
+    val beforeLineCount = before.count { it == '\n' } + 1
+    val afterLineCount = after.count { it == '\n' } + 1
+    return beforeLineCount * afterLineCount > MAX_LCS_LINE_PRODUCT ||
+        before.length + after.length > MAX_LCS_TOTAL_CHARS
+}
+
+private fun buildSummaryDiffField(name: String, before: String, after: String): ToolDiffField {
+    val beforePreview = previewLargeText(before)
+    val afterPreview = previewLargeText(after)
+    val lines = beforePreview.lines.mapIndexed { index, text ->
+        DiffLine(DiffLineKind.REMOVED, index + 1, null, text)
+    } + afterPreview.lines.mapIndexed { index, text ->
+        DiffLine(DiffLineKind.ADDED, null, index + 1, text)
+    }
+    return ToolDiffField(
+        name = name,
+        hunks = listOf(DiffHunk(lines, precededByGap = false)),
+        hasTrailingGap = beforePreview.truncated || afterPreview.truncated,
+    )
+}
+
+private fun buildOneSidedDiffLines(kind: DiffLineKind, text: String): List<LineOp> {
+    return text.split("\n").mapIndexed { index, line ->
+        when (kind) {
+            DiffLineKind.ADDED -> LineOp(DiffLineKind.ADDED, null, index, line)
+            DiffLineKind.REMOVED -> LineOp(DiffLineKind.REMOVED, index, null, line)
+            DiffLineKind.CONTEXT -> LineOp(DiffLineKind.CONTEXT, index, index, line)
         }
     }
 }
 
-/**
- * 提取长文本差异上下文:截取修改位置前后各保留一段文本,用 `...` 省略无关部分。
- */
-internal fun extractDiffContext(before: String, after: String, contextLength: Int = 15): Pair<String, String> {
-    var prefixLen = 0
-    while (prefixLen < before.length && prefixLen < after.length && before[prefixLen] == after[prefixLen]) {
-        prefixLen++
+private fun buildOneSidedSummaryDiffField(name: String, kind: DiffLineKind, text: String): ToolDiffField {
+    val preview = previewLargeText(text)
+    val lines = preview.lines.mapIndexed { index, line ->
+        when (kind) {
+            DiffLineKind.ADDED -> DiffLine(DiffLineKind.ADDED, null, index + 1, line)
+            DiffLineKind.REMOVED -> DiffLine(DiffLineKind.REMOVED, index + 1, null, line)
+            DiffLineKind.CONTEXT -> DiffLine(DiffLineKind.CONTEXT, index + 1, index + 1, line)
+        }
     }
-    
-    var suffixLen = 0
-    while (suffixLen < before.length - prefixLen && suffixLen < after.length - prefixLen && 
-        before[before.length - 1 - suffixLen] == after[after.length - 1 - suffixLen]) {
-        suffixLen++
-    }
-
-    val beforeDiff = before.substring(prefixLen, before.length - suffixLen)
-    val afterDiff = after.substring(prefixLen, after.length - suffixLen)
-
-    val prefixStart = (prefixLen - contextLength).coerceAtLeast(0)
-    val prefix = before.substring(prefixStart, prefixLen).replace(Regex("\\s+"), " ")
-    val prefixDot = if (prefixStart > 0) "..." else ""
-
-    val beforeSuffixEnd = (before.length - suffixLen + contextLength).coerceAtMost(before.length)
-    val beforeSuffix = before.substring(before.length - suffixLen, beforeSuffixEnd).replace(Regex("\\s+"), " ")
-    val beforeSuffixDot = if (beforeSuffixEnd < before.length) "..." else ""
-    
-    val afterSuffixEnd = (after.length - suffixLen + contextLength).coerceAtMost(after.length)
-    val afterSuffix = after.substring(after.length - suffixLen, afterSuffixEnd).replace(Regex("\\s+"), " ")
-    val afterSuffixDot = if (afterSuffixEnd < after.length) "..." else ""
-
-    val cleanBeforeDiff = beforeDiff.replace(Regex("\\s+"), " ")
-    val cleanAfterDiff = afterDiff.replace(Regex("\\s+"), " ")
-
-    val previewBefore = "$prefixDot$prefix[-$cleanBeforeDiff-]$beforeSuffix$beforeSuffixDot"
-    val previewAfter = "$prefixDot$prefix[+$cleanAfterDiff+]$afterSuffix$afterSuffixDot"
-    
-    return previewBefore to previewAfter
+    return ToolDiffField(
+        name = name,
+        hunks = listOf(DiffHunk(lines, precededByGap = false)),
+        hasTrailingGap = preview.truncated,
+    )
 }
 
-private fun jsonValueForPreview(json: JSONObject, field: String): String = when (field) {
-    "key" -> formatJsonArray(json.optJSONArray(field))
-    "content" -> previewText(json.optString(field))
-    else -> json.opt(field)?.toString()?.ifBlank { "(空)" } ?: "(缺失)"
+private fun shouldUseOneSidedSummary(text: String): Boolean {
+    return text.length > MAX_LCS_TOTAL_CHARS || text.count { it == '\n' } + 1 > SUMMARY_PREVIEW_LINES * 4
+}
+
+private data class LargeTextPreview(val lines: List<String>, val truncated: Boolean)
+
+private fun previewLargeText(text: String): LargeTextPreview {
+    val lines = text.split("\n")
+    val keptLines = lines.take(SUMMARY_PREVIEW_LINES).map { line ->
+        if (line.length <= SUMMARY_PREVIEW_CHARS) line else line.take(SUMMARY_PREVIEW_CHARS) + "…"
+    }
+    val truncated = lines.size > keptLines.size || lines.any { it.length > SUMMARY_PREVIEW_CHARS }
+    return LargeTextPreview(keptLines, truncated)
+}
+
+/** 行级 diff 的中间表示:行号为 0 起,渲染时 +1。 */
+internal data class LineOp(
+    val kind: DiffLineKind,
+    val oldIndex: Int?,
+    val newIndex: Int?,
+    val text: String,
+)
+
+/** 标准 LCS 行级 diff:逐行比对,产出上下文 / 删除 / 新增的有序行操作。 */
+internal fun diffLines(before: List<String>, after: List<String>): List<LineOp> {
+    val n = before.size
+    val m = after.size
+    val lcs = Array(n + 1) { IntArray(m + 1) }
+    for (i in n - 1 downTo 0) {
+        for (j in m - 1 downTo 0) {
+            lcs[i][j] = if (before[i] == after[j]) lcs[i + 1][j + 1] + 1
+            else maxOf(lcs[i + 1][j], lcs[i][j + 1])
+        }
+    }
+
+    val ops = mutableListOf<LineOp>()
+    var i = 0
+    var j = 0
+    while (i < n && j < m) {
+        when {
+            before[i] == after[j] -> {
+                ops += LineOp(DiffLineKind.CONTEXT, i, j, before[i])
+                i++; j++
+            }
+            lcs[i + 1][j] >= lcs[i][j + 1] -> {
+                ops += LineOp(DiffLineKind.REMOVED, i, null, before[i])
+                i++
+            }
+            else -> {
+                ops += LineOp(DiffLineKind.ADDED, null, j, after[j])
+                j++
+            }
+        }
+    }
+    while (i < n) { ops += LineOp(DiffLineKind.REMOVED, i, null, before[i]); i++ }
+    while (j < m) { ops += LineOp(DiffLineKind.ADDED, null, j, after[j]); j++ }
+    return ops
+}
+
+/**
+ * 把行操作切成若干 hunk:每个改动行前后保留 [contextLines] 行上下文,相邻改动的上下文重叠时合并成一块。
+ *
+ * @return hunk 列表,以及"最后一块之后是否还有被省略的行"。
+ */
+internal fun splitIntoHunks(ops: List<LineOp>, contextLines: Int): Pair<List<DiffHunk>, Boolean> {
+    val changeIndices = ops.indices.filter { ops[it].kind != DiffLineKind.CONTEXT }
+    if (changeIndices.isEmpty()) return emptyList<DiffHunk>() to false
+
+    val ranges = mutableListOf<IntRange>()
+    for (index in changeIndices) {
+        val start = (index - contextLines).coerceAtLeast(0)
+        val end = (index + contextLines).coerceAtMost(ops.size - 1)
+        val last = ranges.lastOrNull()
+        if (last != null && start <= last.last + 1) {
+            ranges[ranges.size - 1] = last.first..maxOf(last.last, end)
+        } else {
+            ranges += start..end
+        }
+    }
+
+    val hunks = ranges.mapIndexed { rangeIndex, range ->
+        val precededByGap = if (rangeIndex == 0) range.first > 0 else true
+        val lines = range.map { opIndex ->
+            val op = ops[opIndex]
+            DiffLine(op.kind, op.oldIndex?.plus(1), op.newIndex?.plus(1), op.text)
+        }
+        DiffHunk(lines, precededByGap)
+    }
+    val trailingGap = ranges.last().last < ops.size - 1
+    return hunks to trailingGap
 }
 
 private fun entryTitle(entryJson: JSONObject): String {
@@ -627,12 +788,6 @@ private fun formatJsonArray(array: JSONArray?): String {
     return (0 until array.length()).joinToString(prefix = "[", postfix = "]") { index ->
         array.optString(index)
     }
-}
-
-private fun previewText(text: String, limit: Int = 48): String {
-    val normalized = text.replace(Regex("\\s+"), " ").trim()
-    if (normalized.isBlank()) return "(空)"
-    return if (normalized.length <= limit) normalized else normalized.take(limit) + "..."
 }
 
 /**

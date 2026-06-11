@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 20,
+    version = 21,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -332,6 +332,19 @@ abstract class NutTavernDatabase : RoomDatabase() {
                     """.trimIndent()
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_messages_conversationId` ON `messages` (`conversationId`)")
+            }
+        }
+
+        /**
+         * 会话加 enabledLorebookIdsJson 字段:当前会话启用的世界书 id 列表(JSON 数组)。
+         *
+         * 老会话默认 NULL,运行时退回当前默认世界书选择快照;新会话创建时写入默认快照。
+         */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("conversations", "enabledLorebookIdsJson")) {
+                    db.execSQL("ALTER TABLE `conversations` ADD COLUMN `enabledLorebookIdsJson` TEXT DEFAULT NULL")
+                }
             }
         }
 

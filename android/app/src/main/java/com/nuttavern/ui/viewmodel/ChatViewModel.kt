@@ -150,6 +150,10 @@ class ChatViewModel @Inject constructor(
     private val _currentEnabledToolIds = MutableStateFlow<Set<String>>(emptySet())
     val currentEnabledToolIds: StateFlow<Set<String>> = _currentEnabledToolIds.asStateFlow()
 
+    /** 当前会话启用的世界书 id。右侧栏世界书卡片直接读写这个集合,世界书完全跟随会话,不继承任何全局默认。 */
+    private val _currentEnabledLorebookIds = MutableStateFlow<Set<String>>(emptySet())
+    val currentEnabledLorebookIds: StateFlow<Set<String>> = _currentEnabledLorebookIds.asStateFlow()
+
     /** 注册表里的全部内置工具定义,供右侧栏直接渲染工具卡片。 */
     val chatTools: List<com.nuttavern.network.ChatTool> = chatToolRegistry.tools
 
@@ -312,12 +316,12 @@ class ChatViewModel @Inject constructor(
         initialValue = 0 to 0,
     )
 
-    /** 世界书总数 / 全局选中数,供 SettingsDrawer 显示。 */
+    /** 世界书总数 / 当前会话选中数,供 SettingsDrawer 显示。 */
     val lorebookCounts: StateFlow<Pair<Int, Int>> = combine(
         lorebookRepository.lorebooks,
-        lorebookRepository.globalSelectedIds,
+        _currentEnabledLorebookIds,
     ) { books, selectedIds ->
-        books.size to selectedIds.size
+        books.size to books.count { it.id in selectedIds }
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
@@ -422,6 +426,7 @@ class ChatViewModel @Inject constructor(
                     _currentThinkingLevel.value = nextConversation.thinkingLevel
                     _currentToolMode.value = nextConversation.toolMode
                     _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
+                    _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
                 } else {
                     _currentMessages.value = emptyList()
                 }
@@ -534,6 +539,7 @@ class ChatViewModel @Inject constructor(
             _currentThinkingLevel.value = savedConversation.thinkingLevel
             _currentToolMode.value = savedConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(savedConversation)
+            _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(savedConversation)
             return
         }
 
@@ -550,6 +556,7 @@ class ChatViewModel @Inject constructor(
             val restoredToolMode = com.nuttavern.data.tools.ConversationToolMode.fromStorage(saved.toolMode)
             _currentToolMode.value = restoredToolMode
             _currentEnabledToolIds.value = defaultToolIdsForPlaceholder(restoredToolMode)
+            _currentEnabledLorebookIds.value = emptySet()
             _currentMessages.value = emptyList()
             return
         }
@@ -564,6 +571,7 @@ class ChatViewModel @Inject constructor(
             _currentThinkingLevel.value = nextConversation.thinkingLevel
             _currentToolMode.value = nextConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
+            _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
         } else {
             _currentMessages.value = emptyList()
         }
@@ -778,6 +786,7 @@ class ChatViewModel @Inject constructor(
         _currentThinkingLevel.value = conversation.thinkingLevel
         _currentToolMode.value = conversation.toolMode
         _currentEnabledToolIds.value = enabledToolIdsForConversation(conversation)
+        _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(conversation)
         _draft.value = ""
     }
 
@@ -799,6 +808,7 @@ class ChatViewModel @Inject constructor(
         // 真正落库在 ensureCurrentConversation,会写入 _currentEnabledToolIds 的当前值。
         _currentEnabledToolIds.value = defaultEnabledToolIdsForNewConversation()
         _currentToolMode.value = toolModeForEnabledToolIds(_currentEnabledToolIds.value)
+        _currentEnabledLorebookIds.value = emptySet()
         viewModelScope.launch {
             _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
             _currentPresetId.value = resolveDefaultPresetId()
@@ -912,10 +922,24 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    /** 批量更新世界书全局选中状态(Picker Sheet "应用"时调用)。 */
+    /** 批量更新当前会话启用世界书(Picker Sheet "应用"时调用)。 */
     fun updateLorebookSelection(selectedIds: Set<String>) {
+        val validIds = selectedIds.filter { id -> id.isNotBlank() }.toSet()
+        _currentEnabledLorebookIds.value = validIds
+
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
+
+        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val nextJson = encodeStringListToJson(validIds.toList())
+        if (conversation.enabledLorebookIdsJson == nextJson) return
+
         viewModelScope.launch {
-            lorebookRepository.setGlobalSelected(selectedIds.toList())
+            val updated = conversation.copy(enabledLorebookIdsJson = nextJson)
+            conversationRepository.updateConversation(updated)
+            _conversationList.update { list ->
+                list.map { if (it.id == conversationId) updated else it }
+            }
         }
     }
 
@@ -1104,8 +1128,19 @@ class ChatViewModel @Inject constructor(
      * 无会话(占位态发送)时 conversationId 为 null,世界书集合按当前 character / persona 仍可解析。
      */
     private suspend fun buildToolContext(conversationId: String?): com.nuttavern.network.ToolContext {
+        val conversation = conversationId?.let { id ->
+            _conversationList.value.firstOrNull { it.id == id }
+                ?: _allConversations.value.firstOrNull { it.id == id }
+        }
+        val selectedLorebookIds = conversation?.let(::enabledLorebookIdsForConversation)
+            ?: _currentEnabledLorebookIds.value
+        val character = conversation?.characterId
+            ?.let { id -> runCatching { characterRepository.getCharacterById(id) }.getOrNull() }
+            ?: if (conversationId == null) _currentCharacter.value else null
+        val persona = conversation?.personaId?.let { id -> findPersonaById(id) }
+            ?: if (conversationId == null) _currentPersona.value else null
         val sessionLorebooks = sessionLorebookResolver
-            .resolve(_currentCharacter.value, _currentPersona.value)
+            .resolve(selectedLorebookIds.toList(), character, persona)
             .map { it.book }
         return object : com.nuttavern.network.ToolContext {
             override val conversationId: String? = conversationId
@@ -1289,6 +1324,8 @@ class ChatViewModel @Inject constructor(
         val enabledOrphanRegexIds = snapshotEnabledOrphanRegexIdsJson()
         val enabledToolIds = _currentEnabledToolIds.value
         val enabledToolIdsJson = snapshotEnabledToolIdsJson()
+        val enabledLorebookIds = _currentEnabledLorebookIds.value
+        val enabledLorebookIdsJson = snapshotEnabledLorebookIdsJson()
         val toolMode = toolModeForEnabledToolIds(enabledToolIds)
         val newConversationId = "conv-${System.currentTimeMillis()}"
         val titleSeed = character?.name?.takeIf { it.isNotBlank() } ?: firstMessage
@@ -1303,6 +1340,7 @@ class ChatViewModel @Inject constructor(
             presetId = presetId,
             enabledRegexGroupIds = enabledRegexGroupIds,
             enabledOrphanRegexIds = enabledOrphanRegexIds,
+            enabledLorebookIdsJson = enabledLorebookIdsJson,
             enabledToolIdsJson = enabledToolIdsJson,
             thinkingLevel = thinkingLevel,
             toolMode = toolMode,
@@ -1317,6 +1355,7 @@ class ChatViewModel @Inject constructor(
         _currentThinkingLevel.value = thinkingLevel
         _currentToolMode.value = toolMode
         _currentEnabledToolIds.value = enabledToolIds
+        _currentEnabledLorebookIds.value = enabledLorebookIds
         _currentMessages.value = emptyList()
 
         // 角色绑定时插入 greeting 作为新会话的首条 assistant 消息(对齐酒馆 first_mes 行为)。
@@ -1379,6 +1418,7 @@ class ChatViewModel @Inject constructor(
         _currentThinkingLevel.value = nextConversation.thinkingLevel
         _currentToolMode.value = nextConversation.toolMode
         _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
+        _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
         _draft.value = ""
         _isReplying.value = false
     }
@@ -1414,6 +1454,7 @@ class ChatViewModel @Inject constructor(
             _currentThinkingLevel.value = nextConversation.thinkingLevel
             _currentToolMode.value = nextConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
+            _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
         }
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -1657,6 +1698,14 @@ class ChatViewModel @Inject constructor(
         return encodeStringListToJson(_currentEnabledToolIds.value.toList())
     }
 
+    private fun snapshotEnabledLorebookIdsJson(): String {
+        return encodeStringListToJson(_currentEnabledLorebookIds.value.toList())
+    }
+
+    private fun enabledLorebookIdsForConversation(conversation: ConversationSummary): Set<String> {
+        return parseJsonStringList(conversation.enabledLorebookIdsJson).toSet()
+    }
+
     private fun enabledToolIdsForConversation(conversation: ConversationSummary): Set<String> {
         val storedIds = parseJsonStringList(conversation.enabledToolIdsJson)
         if (storedIds.isNotEmpty() || conversation.enabledToolIdsJson == "[]") return storedIds.toSet()
@@ -1884,7 +1933,7 @@ class ChatViewModel @Inject constructor(
         )
         val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
-        // 世界书激活:合并全局选中 + 角色世界书/辅助世界书 + persona 世界书
+        // 世界书激活:合并当前会话选中 + 角色世界书/辅助世界书 + persona 世界书
         val lorebookResult = runLorebookActivation(conversation, history, character, preset, persona)
 
         return PromptComposerInput(
@@ -1900,9 +1949,7 @@ class ChatViewModel @Inject constructor(
         )
     }
 
-    /**
-     * 执行世界书激活扫描。合并全局选中的世界书 + 角色世界书/辅助世界书 + persona 世界书。
-     */
+    /** 执行世界书激活扫描。合并当前会话选中 + 角色世界书/辅助世界书 + persona 世界书。 */
     private suspend fun runLorebookActivation(
         conversation: ConversationSummary?,
         history: List<HistoryMessage>,
@@ -1911,7 +1958,9 @@ class ChatViewModel @Inject constructor(
         persona: com.nuttavern.data.persona.UserPersona?,
     ): com.nuttavern.lorebook.LorebookEngine.ActivationResult? {
         // 三来源合并去重与世界书编辑工具共用同一口径,见 SessionLorebookResolver。
-        val taggedLorebooks = sessionLorebookResolver.resolve(character, persona)
+        val selectedLorebookIds = conversation?.let(::enabledLorebookIdsForConversation)
+            ?: _currentEnabledLorebookIds.value
+        val taggedLorebooks = sessionLorebookResolver.resolve(selectedLorebookIds.toList(), character, persona)
         if (taggedLorebooks.isEmpty()) {
             return com.nuttavern.lorebook.LorebookEngine.ActivationResult(
                 nextTimedEffects = com.nuttavern.lorebook.LorebookTimedEffectState.Empty,

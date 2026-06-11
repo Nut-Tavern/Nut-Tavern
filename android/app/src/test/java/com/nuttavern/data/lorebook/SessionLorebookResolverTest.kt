@@ -14,7 +14,7 @@ class SessionLorebookResolverTest {
     fun emptySelection_producesEmpty() {
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("a"), book("b")),
-            globalSelectedIds = emptyList(),
+            selectedLorebookIds = emptyList(),
             character = null,
             persona = null,
         )
@@ -22,14 +22,14 @@ class SessionLorebookResolverTest {
     }
 
     @Test
-    fun globalSelected_includedInAllBooksOrder() {
+    fun selectedLorebooks_includedInAllBooksOrder() {
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("a"), book("b"), book("c")),
-            globalSelectedIds = listOf("c", "a"),
+            selectedLorebookIds = listOf("c", "a"),
             character = null,
             persona = null,
         )
-        // 顺序跟随 allBooks(a 在 c 前),不跟随 globalSelectedIds 的顺序。
+        // 顺序跟随 allBooks(a 在 c 前),不跟随 selectedLorebookIds 的顺序。
         assertEquals(listOf("a", "c"), result.map { it.book.id })
         assertEquals(listOf(false, false), result.map { it.isCharacterSource })
     }
@@ -39,7 +39,7 @@ class SessionLorebookResolverTest {
         val character = Character(characterLorebookId = "primary", lorebookIds = listOf("extra"))
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("primary"), book("extra"), book("global")),
-            globalSelectedIds = listOf("global"),
+            selectedLorebookIds = listOf("global"),
             character = character,
             persona = null,
         )
@@ -56,7 +56,7 @@ class SessionLorebookResolverTest {
         val persona = UserPersona(lorebookId = "shared")
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("shared")),
-            globalSelectedIds = emptyList(),
+            selectedLorebookIds = emptyList(),
             character = character,
             persona = persona,
         )
@@ -71,7 +71,7 @@ class SessionLorebookResolverTest {
         val persona = UserPersona(lorebookId = "p")
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("p"), book("g")),
-            globalSelectedIds = listOf("g"),
+            selectedLorebookIds = listOf("g"),
             character = null,
             persona = persona,
         )
@@ -82,12 +82,12 @@ class SessionLorebookResolverTest {
     }
 
     @Test
-    fun globalBook_alsoCharacterBound_skippedFromGlobalPass() {
-        // 一本书既被角色绑定又被全局选中 → 只作为角色来源出现一次,不重复。
+    fun selectedBook_alsoCharacterBound_skippedFromSelectedPass() {
+        // 一本书既被角色绑定又被当前会话选中 → 只作为角色来源出现一次,不重复。
         val character = Character(characterLorebookId = "x")
         val result = resolveSessionLorebooks(
             allBooks = listOf(book("x")),
-            globalSelectedIds = listOf("x"),
+            selectedLorebookIds = listOf("x"),
             character = character,
             persona = null,
         )

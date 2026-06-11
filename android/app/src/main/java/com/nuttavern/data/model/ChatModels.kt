@@ -36,6 +36,10 @@ data class ConversationSummary(
      * 语义与 [enabledRegexGroupIds] 完全一致,只是对应散规则而非组。
      */
     val enabledOrphanRegexIds: String? = null,
+    /**
+     * 当前会话启用的世界书 id 列表(JSON 数组字符串)。null = 老会话兼容,运行时用默认世界书选择快照。
+     */
+    val enabledLorebookIdsJson: String? = null,
     val lorebookTimedEffectsJson: String = "{}",
     /** 当前会话启用的客户端内置工具 id 列表(JSON 数组字符串)。null = 老会话兼容,运行时用默认工具集。 */
     val enabledToolIdsJson: String? = null,
