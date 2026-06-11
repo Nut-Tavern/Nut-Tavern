@@ -105,13 +105,28 @@ class LorebookWriteTools @Inject constructor(
             lorebookRepository.updateEntries(lorebookId, plan.resultEntries)
         }
 
-        return JSONObject()
+        val response = JSONObject()
             .put("lorebook_id", lorebookId)
             .put("preview", preview)
+            // saved 明示是否真正落库,避免模型把 preview dry-run 误读成"已保存"。
+            .put("saved", !preview)
             .put("applied", plan.appliedJson)
             .put("before_after", plan.beforeAfterJson)
             .put("undo_depth", editHistory.depth(lorebookId))
-            .toString()
+        if (preview) {
+            response.put("note", "这是预览结果，尚未保存。确认无误后用 preview=false 再次调用同样的 edits 才会写入。")
+        }
+        // 被改动后仍处于禁用态的条目:提示模型/用户它们不会参与本轮注入,改了也"不生效"。
+        val disabledTargets = disabledEffectiveUids(plan.resultEntries, plan.appliedJson)
+        if (disabledTargets.isNotEmpty()) {
+            response.put("disabled_entry_uids", JSONArray(disabledTargets))
+            response.put(
+                "disabled_note",
+                "uid $disabledTargets 当前为禁用状态，编辑已记录但不会参与对话注入。" +
+                    "若需生效，用 set_enabled 启用对应条目。",
+            )
+        }
+        return response.toString()
     }
 
     private suspend fun undoLorebookEdits(
@@ -366,3 +381,23 @@ private fun entrySummaryJson(entry: LorebookEntry): JSONObject =
         .put("key", JSONArray(entry.key))
         .put("enabled", !entry.disable)
         .put("content", entry.content)
+
+/**
+ * 找出被 create / update 触碰、但结果仍处于禁用态的条目 uid。
+ *
+ * 这些条目编辑成功也不会参与对话注入(运行时只扫 `!disable` 的条目),回执据此提示模型/用户。
+ * set_enabled / delete 不在此列:前者本身就是启停意图,后者条目已不存在。
+ */
+internal fun disabledEffectiveUids(resultEntries: List<LorebookEntry>, appliedJson: JSONArray): List<Int> {
+    val touchedUids = buildSet {
+        for (i in 0 until appliedJson.length()) {
+            val applied = appliedJson.optJSONObject(i) ?: continue
+            when (applied.optString("op")) {
+                EDIT_OP_CREATE, EDIT_OP_UPDATE -> add(applied.optInt("uid"))
+            }
+        }
+    }
+    return resultEntries
+        .filter { it.uid in touchedUids && it.disable }
+        .map { it.uid }
+}

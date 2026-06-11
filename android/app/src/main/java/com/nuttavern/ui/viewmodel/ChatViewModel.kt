@@ -177,11 +177,13 @@ class ChatViewModel @Inject constructor(
     val currentToolActivity: StateFlow<String?> = _currentToolActivity.asStateFlow()
 
     /**
-     * 本次流式回复已执行完成的工具调用,按发生顺序累积。落库时转成 ToolCall part。
-     * 第二批顺序约定:落库 parts = [Reasoning?] + [ToolCall...] + [Text?](工具插在思考与正文之间)。
-     * 第三批做真正的有序穿插时,改由流式 fold 精确记录各 part 的相对顺序。
+     * 本次流式回复已执行完成的工具调用,按发生顺序累积。每条携带"工具到达时已累积的正文长度"
+     * ([StreamingToolMark.contentOffset]),落库时据此把正文切成多段,与工具按真实时序交错穿插。
+     *
+     * OpenAI 等协议每轮 SSE 要么全文字要么全工具,工具总在一段文字之后;记录切点即可还原
+     * "文字A → 工具 → 文字B → 工具" 的真实顺序,而非把工具全聚到正文前。
      */
-    private val _streamingToolCalls = MutableStateFlow<List<MessagePart.ToolCall>>(emptyList())
+    private val _streamingToolMarks = MutableStateFlow<List<StreamingToolMark>>(emptyList())
 
     private val _streamingConversationId = MutableStateFlow<String?>(null)
     val streamingConversationId: StateFlow<String?> = _streamingConversationId.asStateFlow()
@@ -709,14 +711,14 @@ class ChatViewModel @Inject constructor(
                             val finalContent = _streamingContent.value
                             val finalReasoningContent = _streamingReasoningContent.value
                             val finalReasoningDurationMillis = _streamingReasoningDurationMillis.value
-                            val finalToolCalls = _streamingToolCalls.value
+                            val finalToolMarks = _streamingToolMarks.value
                             clearStreamingState(conversationId)
                             saveAssistantReplyIfConversationExists(
                                 conversationId,
                                 finalContent,
                                 finalReasoningContent,
                                 finalReasoningDurationMillis,
-                                finalToolCalls,
+                                finalToolMarks,
                             )
                             _isReplying.value = false
                         }
@@ -748,16 +750,16 @@ class ChatViewModel @Inject constructor(
             val partialContent = _streamingContent.value.trimEnd()
             val partialReasoningContent = _streamingReasoningContent.value.trimEnd()
             val partialReasoningDurationMillis = _streamingReasoningDurationMillis.value
-            val partialToolCalls = _streamingToolCalls.value
+            val partialToolMarks = _streamingToolMarks.value
             clearStreamingState(conversationId)
-            if (partialContent.isNotBlank() || partialReasoningContent.isNotBlank() || partialToolCalls.isNotEmpty()) {
+            if (partialContent.isNotBlank() || partialReasoningContent.isNotBlank() || partialToolMarks.isNotEmpty()) {
                 viewModelScope.launch {
                     saveAssistantReplyIfConversationExists(
                         conversationId,
                         partialContent,
                         partialReasoningContent,
                         partialReasoningDurationMillis,
-                        partialToolCalls,
+                        partialToolMarks,
                     )
                 }
             }
@@ -1049,8 +1051,8 @@ class ChatViewModel @Inject constructor(
     /**
      * 本次发送实际要带的内置工具。三重门控:
      * 1. 当前会话 enabledToolIds → 决定本会话启用哪些工具;
-     * 2. settings.approvalRequiredToolIds → 合并到 [ChatTool.needsApproval],实现每工具确认;
-     * 4. 注册表里存在的工具定义。
+     * 2. settings.approvalRequiredToolIds → 在工具自身强制确认之外,允许用户额外要求确认;
+     * 3. 注册表里存在的工具定义。
      */
     private fun resolveActiveTools(
         settings: com.nuttavern.data.tools.LocalToolsSettings,
@@ -1060,7 +1062,13 @@ class ChatViewModel @Inject constructor(
         return chatToolRegistry.tools
             .filter { it.id in enabledToolIds }
             .map { tool ->
-                tool.copy(needsApproval = settings.isApprovalRequiredForTool(tool.id))
+                tool.copy(
+                    // 工具自身标注的高风险确认不能被设置页关闭;设置页只能给低风险工具额外加确认。
+                    needsApproval = com.nuttavern.network.shouldRequireToolApproval(
+                        toolRequiresApproval = tool.needsApproval,
+                        userRequiresApproval = settings.isApprovalRequiredForTool(tool.id),
+                    ),
+                )
             }
     }
 
@@ -1424,12 +1432,12 @@ class ChatViewModel @Inject constructor(
         content: String,
         reasoningContent: String = "",
         reasoningDurationMillis: Long = 0L,
-        toolCalls: List<MessagePart.ToolCall> = emptyList(),
+        toolMarks: List<StreamingToolMark> = emptyList(),
     ) {
         val reasoningSplit = GeneratedContentSanitizer.splitReasoningFromAnswer(content)
-        // 只去掉**末尾**的多余空行,保留前导空行 / 中间所有换行,避免吞掉 markdown 段落分隔。
-        // 流式期间不对中间态做任何裁剪;落库时只清理"模型最后一帧多甩出来的尾部 \n"。
-        val normalizedContent = reasoningSplit.answerContent.trimEnd()
+        // answerContent 不在这里 trimEnd:工具切点 contentOffset 是针对未裁剪的正文记录的,
+        // 提前 trim 会让切点错位。裁剪只在最后一段文本上做。
+        val answerContent = reasoningSplit.answerContent
         val normalizedReasoningContent = buildString {
             append(reasoningContent.trimEnd())
             if (reasoningSplit.reasoningContent.isNotBlank()) {
@@ -1437,16 +1445,10 @@ class ChatViewModel @Inject constructor(
                 append(reasoningSplit.reasoningContent.trimEnd())
             }
         }.trimEnd()
-        if (normalizedContent.isBlank() && normalizedReasoningContent.isBlank() && toolCalls.isEmpty()) return
+        if (answerContent.isBlank() && normalizedReasoningContent.isBlank() && toolMarks.isEmpty()) return
         if (!conversationRepository.nonArchivedConversationExists(conversationId)) return
 
-        // AI_OUTPUT 阶段正则:在落库前跑一次。流式期间不跑(完整文本才能正确匹配),
-        // reasoning 暂不跑 REASONING placement(等第三批 reasoning 模块再接)。
-        val regexProcessedContent = applyAiOutputRegex(conversationId, normalizedContent)
-
         val createdAt = System.currentTimeMillis()
-        // 落库 parts 顺序:思考块 → 工具调用 → 正文,保持"思考 / 工具在正文上方"的现有渲染观感。
-        // 第三批做真正的有序穿插时,改由流式 fold 精确记录各 part 的相对到达顺序。
         val assistantParts = buildList {
             if (normalizedReasoningContent.isNotBlank()) {
                 add(
@@ -1456,10 +1458,7 @@ class ChatViewModel @Inject constructor(
                     )
                 )
             }
-            addAll(toolCalls)
-            if (regexProcessedContent.isNotEmpty()) {
-                add(MessagePart.Text(regexProcessedContent))
-            }
+            addAll(buildInterleavedToolAndTextParts(conversationId, answerContent, toolMarks))
         }
         // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning / 工具又都为空时 assistantParts 会空。
         // 不落空消息(否则渲染出一条只能长按、内容空白的行)。
@@ -1474,6 +1473,38 @@ class ChatViewModel @Inject constructor(
             createdAt = createdAt,
         )
         refreshConversationTime(conversationId, createdAt)
+    }
+
+    /**
+     * 按工具到达切点把正文切段,与工具调用交错,还原"文字 → 工具 → 文字"的真实顺序。
+     *
+     * 切点编排走纯函数 [interleaveContentWithTools];本方法只负责把切出来的文字段跑
+     * AI_OUTPUT 正则(切点处前后文本是模型分别产出的独立片段,逐段匹配比跨工具拼接更符合语义),
+     * 并把工具片段配上对应 [MessagePart.ToolCall]。
+     *
+     * AI_OUTPUT 正则在落库前跑;流式期间不跑(需完整文本才能正确匹配)。无工具时与历史行为一致。
+     */
+    private suspend fun buildInterleavedToolAndTextParts(
+        conversationId: String,
+        answerContent: String,
+        toolMarks: List<StreamingToolMark>,
+    ): List<MessagePart> {
+        val sortedMarks = toolMarks.sortedBy { it.contentOffset }
+        val slices = interleaveContentWithTools(answerContent, sortedMarks.map { it.contentOffset })
+
+        val parts = mutableListOf<MessagePart>()
+        for (slice in slices) {
+            when (slice) {
+                is ContentSlice.Text -> {
+                    val segment = if (slice.isTail) slice.raw.trimEnd() else slice.raw
+                    if (segment.isEmpty()) continue
+                    val processed = applyAiOutputRegex(conversationId, segment)
+                    if (processed.isNotEmpty()) parts += MessagePart.Text(processed)
+                }
+                is ContentSlice.Tool -> parts += sortedMarks[slice.toolIndex].part
+            }
+        }
+        return parts
     }
 
     /**
@@ -1772,14 +1803,14 @@ class ChatViewModel @Inject constructor(
                     val finalContent = _streamingContent.value
                     val finalReasoningContent = _streamingReasoningContent.value
                     val finalReasoningDurationMillis = _streamingReasoningDurationMillis.value
-                    val finalToolCalls = _streamingToolCalls.value
+                    val finalToolMarks = _streamingToolMarks.value
                     clearStreamingState(conversationId)
                     saveAssistantReplyIfConversationExists(
                         conversationId,
                         finalContent,
                         finalReasoningContent,
                         finalReasoningDurationMillis,
-                        finalToolCalls,
+                        finalToolMarks,
                     )
                     _isReplying.value = false
                 }
@@ -2035,15 +2066,31 @@ class ChatViewModel @Inject constructor(
         val lorebookTimedEffectsJson: String?,
     )
 
-    /** 把流式过程中执行完成的工具调用累积成 ToolCall part,落库时按顺序插入消息 parts。 */
+    /**
+     * 流式工具调用标记:工具 part + 它到达时已累积的正文字符数([contentOffset])。
+     * 切点用于落库时把最终正文切成"工具前 / 工具后"两段,实现有序穿插。
+     */
+    private data class StreamingToolMark(
+        val part: MessagePart.ToolCall,
+        val contentOffset: Int,
+    )
+
+    /**
+     * 把流式过程中执行完成的工具调用累积进时间线,并记录"此刻已累积的正文长度"作为切点。
+     * 落库时按切点把正文切段,与工具交错还原真实顺序。
+     */
     private fun appendStreamingToolCall(record: com.nuttavern.network.ToolCallRecord) {
-        _streamingToolCalls.update { calls ->
-            calls + MessagePart.ToolCall(
-                toolCallId = record.id,
-                toolName = record.name,
-                arguments = record.arguments,
-                result = record.result,
-                denied = record.denied,
+        val contentOffset = _streamingContent.value.length
+        _streamingToolMarks.update { marks ->
+            marks + StreamingToolMark(
+                part = MessagePart.ToolCall(
+                    toolCallId = record.id,
+                    toolName = record.name,
+                    arguments = record.arguments,
+                    result = record.result,
+                    denied = record.denied,
+                ),
+                contentOffset = contentOffset,
             )
         }
     }
@@ -2140,7 +2187,7 @@ class ChatViewModel @Inject constructor(
             _streamingReasoningContent.value = ""
             _streamingReasoningDurationMillis.value = 0L
             _currentToolActivity.value = null
-            _streamingToolCalls.value = emptyList()
+            _streamingToolMarks.value = emptyList()
             streamingReasoningStartedAtMillis = null
             streamingReasoningEndedAtMillis = null
             streamingReasoningTimerJob?.cancel()

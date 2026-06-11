@@ -165,4 +165,50 @@ class LorebookWriteToolsTest {
         assertNotNull(entry.get("before"))
         assertEquals(JSONObject.NULL, entry.get("after"))
     }
+
+    @Test
+    fun disabledEffectiveUids_flagsUpdatedEntryStillDisabled() {
+        // 更新一个 disabled 条目(uid=1 在 book 里 disable=true)的正文,改成功但仍禁用。
+        val plan = planLorebookEdits(
+            book,
+            edits(
+                JSONObject().put("op", "update").put("uid", 1).put(
+                    "patch",
+                    JSONObject().put("content", "改后森林"),
+                ),
+            ),
+        )
+        assertNull(plan.error)
+        assertEquals(listOf(1), disabledEffectiveUids(plan.resultEntries, plan.appliedJson))
+    }
+
+    @Test
+    fun disabledEffectiveUids_ignoresEnabledAndSetEnabledOps() {
+        // update enabled 条目(uid=0)+ set_enabled 启用 uid=1:无"改了不生效"的条目。
+        val plan = planLorebookEdits(
+            book,
+            edits(
+                JSONObject().put("op", "update").put("uid", 0).put("patch", JSONObject().put("content", "x")),
+                JSONObject().put("op", "set_enabled").put("uid", 1).put("enabled", true),
+            ),
+        )
+        assertNull(plan.error)
+        assertEquals(emptyList<Int>(), disabledEffectiveUids(plan.resultEntries, plan.appliedJson))
+    }
+
+    @Test
+    fun disabledEffectiveUids_flagsCreatedDisabledEntry() {
+        // 新建一个 enabled=false 的条目:创建成功但不生效,应被标记。
+        val plan = planLorebookEdits(
+            book,
+            edits(
+                JSONObject().put("op", "create").put(
+                    "entry",
+                    JSONObject().put("comment", "草稿").put("enabled", false),
+                ),
+            ),
+        )
+        assertNull(plan.error)
+        assertEquals(listOf(2), disabledEffectiveUids(plan.resultEntries, plan.appliedJson))
+    }
 }
