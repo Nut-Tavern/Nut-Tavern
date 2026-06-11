@@ -14,7 +14,7 @@ import kotlinx.serialization.Serializable
  * **基础字段**(编辑页主区暴露):
  * - [name]:发给 AI 的"我"叫什么;占位符 `{{user}}` 取值。**必填**。
  * - [description]:发给 AI 的"我"是谁,长文本人设描述;占位符 `{{persona}}` 取值。可空。
- * - [avatarPath]:头像本地路径(前端预留位置,未接入相册选择)。
+ * - [avatarPath]:头像本地路径。
  *
  * **高级字段**(编辑页折叠区暴露):
  * - [title]:仅在 UI 显示的备注,不发给 AI。例如"工作号 / 摸鱼号"。
@@ -23,11 +23,9 @@ import kotlinx.serialization.Serializable
  * - [depth]:仅当 [position] = [PersonaPosition.AT_DEPTH] 时生效,从底向上数第几条消息后插入。
  * - [role]:注入消息使用的对话角色。
  *
- * **关联字段**(渐进接入,前端预留入口):
- * - [lorebookId]:绑定的世界书 id;等世界书模块接入后启用。
- * - [characterConnections]:绑定到哪些角色;切角色时自动切 persona。等角色卡模块接入后启用。
- *
- * 数据 schema 一次到位;UI 暴露所有字段,关联类入口暂时弹"待接入"。
+ * **关联字段**:
+ * - [lorebookId]:绑定的世界书 id;使用该身份时作为 persona 来源参与世界书激活。
+ * - [characterConnections]:绑定到哪些角色;切到无历史会话的角色 / 新建角色会话时自动选择该 persona。
  *
  * # 序列化
  *

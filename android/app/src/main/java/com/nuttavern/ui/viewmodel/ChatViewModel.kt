@@ -19,6 +19,8 @@ import com.nuttavern.data.model.ThinkingLevel
 import com.nuttavern.data.model.WorkspaceAccessMode
 import com.nuttavern.data.persona.PersonaRepository
 import com.nuttavern.data.persona.UserPersona
+import com.nuttavern.data.persona.normalizePersonaIdForConversationStorage
+import com.nuttavern.data.persona.selectInitialPersonaIdForCharacter
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.data.preset.PresetRepository
 import com.nuttavern.data.preset.presetRegexScripts
@@ -249,10 +251,11 @@ class ChatViewModel @Inject constructor(
      * - 进入已有会话([selectConversation]) → 同步成该会话持久化的 personaId;
      * - 抽屉切身份([selectPersonaForCurrentConversation]) → 直接写当前会话的 personaId,
      *   并把这里同步上;
-     * - 开新会话([startNewConversation]) → 重置成默认身份 id,作为下一条新会话的初值;
+     * - 开新会话([startNewConversation]) → 按当前角色绑定 / 默认身份决定下一条新会话初值;
      * - 创建新会话([ensureCurrentConversation]) → 把这里的值落到 `conversations.personaId`。
      *
-     * `null` 表示"无身份"(包括"无"伪卡 / 老数据迁移上来的会话):拼接管线跳过用户身份块。
+     * 已落库会话里 `null` 表示"无身份";新会话占位态里 [UserPersona.NONE_PERSONA_ID]
+     * 表示用户 / 默认身份明确选择了"无"伪卡,创建会话时再归一成 null 写库。
      */
     private val _currentPersonaId = MutableStateFlow<String?>(null)
     val currentPersonaId: StateFlow<String?> = _currentPersonaId.asStateFlow()
@@ -356,6 +359,8 @@ class ChatViewModel @Inject constructor(
     private var streamingReasoningStartedAtMillis: Long? = null
     private var streamingReasoningEndedAtMillis: Long? = null
     private var streamingReasoningTimerJob: Job? = null
+    private var newConversationPersonaJob: Job? = null
+    private var newConversationPresetJob: Job? = null
 
     /**
      * 是否已完成"启动持久化恢复"。在恢复完成之前,自动恢复路径
@@ -421,6 +426,7 @@ class ChatViewModel @Inject constructor(
                 val nextConversation = latestConversationForAssistant(_currentAssistantId.value)
                 _currentConversationId.value = nextConversation?.id.orEmpty()
                 if (nextConversation != null) {
+                    cancelNewConversationInitializers()
                     _currentCharacterId.value = nextConversation.characterId
                     _currentPersonaId.value = nextConversation.personaId
                     _currentPresetId.value = nextConversation.presetId
@@ -533,6 +539,7 @@ class ChatViewModel @Inject constructor(
             ?.let { id -> firstConversations.firstOrNull { it.id == id && !it.archived } }
 
         if (savedConversation != null) {
+            cancelNewConversationInitializers()
             _currentConversationId.value = savedConversation.id
             _currentCharacterId.value = savedConversation.characterId
             _currentPersonaId.value = savedConversation.personaId
@@ -566,6 +573,7 @@ class ChatViewModel @Inject constructor(
         val nextConversation = latestConversationForAssistant(_currentAssistantId.value)
         _currentConversationId.value = nextConversation?.id.orEmpty()
         if (nextConversation != null) {
+            cancelNewConversationInitializers()
             _currentCharacterId.value = nextConversation.characterId
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
@@ -780,6 +788,7 @@ class ChatViewModel @Inject constructor(
         val conversation = _conversationList.value.firstOrNull { it.id == id && !it.archived }
         if (conversation == null) return
 
+        cancelNewConversationInitializers()
         _currentConversationId.value = conversation.id
         _currentCharacterId.value = conversation.characterId
         _currentPersonaId.value = conversation.personaId
@@ -796,11 +805,15 @@ class ChatViewModel @Inject constructor(
      * [ensureCurrentConversation] 创建,避免产生空会话。
      *
      * **保留** [currentCharacterId]:用户开新会话前已经选好的角色,在新会话里继续生效。
-     * **重置** [currentPersonaId] / [currentPresetId] **为当前默认值**:与酒馆"新会话默认 = 全局默认"
-     * 行为一致,用户在抽屉里改身份 / 预设会立即写到新建出来的会话上。
+     * **重置** [currentPersonaId]:当前角色有绑定身份时优先使用绑定身份,否则回到全局默认身份。
+     * **重置** [currentPresetId] **为当前默认值**:用户在抽屉里改预设会立即写到新建出来的会话上。
      * **重置** [currentThinkingLevel] **为默认**([ThinkingLevel.Default]):新会话默认"自动"。
      */
     fun startNewConversation() {
+        startNewConversationPlaceholder(_currentCharacterId.value)
+    }
+
+    private fun startNewConversationPlaceholder(characterId: String?) {
         _currentConversationId.value = ""
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -810,8 +823,14 @@ class ChatViewModel @Inject constructor(
         _currentEnabledToolIds.value = defaultEnabledToolIdsForNewConversation()
         _currentToolMode.value = toolModeForEnabledToolIds(_currentEnabledToolIds.value)
         _currentEnabledLorebookIds.value = emptySet()
-        viewModelScope.launch {
-            _currentPersonaId.value = resolveDefaultPersonaIdOrNull()
+        newConversationPersonaJob?.cancel()
+        _currentPersonaId.value = null
+        newConversationPersonaJob = viewModelScope.launch {
+            _currentPersonaId.value = resolveInitialPersonaIdForCharacter(characterId)
+        }
+        newConversationPresetJob?.cancel()
+        _currentPresetId.value = null
+        newConversationPresetJob = viewModelScope.launch {
             _currentPresetId.value = resolveDefaultPresetId()
         }
     }
@@ -824,6 +843,13 @@ class ChatViewModel @Inject constructor(
      */
     fun selectCharacterForNewConversation(characterId: String?) {
         _currentCharacterId.value = characterId
+        if (_currentConversationId.value.isBlank()) {
+            newConversationPersonaJob?.cancel()
+            _currentPersonaId.value = null
+            newConversationPersonaJob = viewModelScope.launch {
+                _currentPersonaId.value = resolveInitialPersonaIdForCharacter(characterId)
+            }
+        }
     }
 
     /**
@@ -840,7 +866,7 @@ class ChatViewModel @Inject constructor(
             selectConversation(target.id)
         } else {
             _currentCharacterId.value = characterId
-            startNewConversation()
+            startNewConversationPlaceholder(characterId)
         }
     }
 
@@ -871,13 +897,14 @@ class ChatViewModel @Inject constructor(
      *   等 [ensureCurrentConversation] 创建会话时落库。
      *
      * 传 [UserPersona.NONE_PERSONA_ID] = 切到"无"伪卡 = 该会话不拼接用户身份提示词,
-     * 仓库层会把 personaId 持久化为 null。
+     * 创建 / 更新会话时会把 personaId 归一化为 null。
      */
     fun selectPersonaForCurrentConversation(personaId: String) {
-        val normalizedId = personaId.takeIf { it != UserPersona.NONE_PERSONA_ID }
-        _currentPersonaId.value = normalizedId
-
+        newConversationPersonaJob?.cancel()
         val conversationId = _currentConversationId.value
+        val normalizedId = normalizePersonaIdForConversationStorage(personaId)
+        _currentPersonaId.value = if (conversationId.isBlank()) personaId else normalizedId
+
         if (conversationId.isBlank()) return
 
         val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
@@ -899,6 +926,7 @@ class ChatViewModel @Inject constructor(
      * - 当前是"新会话"占位状态 → 只更新内存里的 [currentPresetId],等创建会话时落库。
      */
     fun selectPresetForCurrentConversation(presetId: String) {
+        newConversationPresetJob?.cancel()
         _currentPresetId.value = presetId
 
         val conversationId = _currentConversationId.value
@@ -1315,10 +1343,12 @@ class ChatViewModel @Inject constructor(
 
         val characterId = _currentCharacterId.value
         val character = characterId?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
-        // 新会话 persona / preset 初值优先级:用户在抽屉里预选(`_currentXxx.value`) > 默认值。
-        // 进入这里通常 _currentXxx 已经是 startNewConversation 设置好的默认;用户在新会话占位
-        // 状态切了对应字段才会偏离默认。
-        val personaId = _currentPersonaId.value ?: resolveDefaultPersonaIdOrNull()
+        cancelNewConversationInitializers()
+        // 新会话 persona 初值优先级:用户在抽屉里预选 > 角色绑定身份 > 默认身份。
+        // 默认身份如果是"无"伪卡,占位态用 none 表达,写入会话表时再归一成 null。
+        // preset 初值优先级:用户在抽屉里预选 > 默认预设。
+        val selectedPersonaId = _currentPersonaId.value ?: resolveInitialPersonaIdForCharacter(characterId)
+        val personaId = normalizePersonaIdForConversationStorage(selectedPersonaId)
         val presetId = _currentPresetId.value ?: resolveDefaultPresetId()
         val thinkingLevel = _currentThinkingLevel.value
         val enabledRegexGroupIds = snapshotEnabledRegexGroupIdsJson()
@@ -1412,6 +1442,7 @@ class ChatViewModel @Inject constructor(
 
         // 同步切到 next 会话锁定的 character / persona / preset / thinkingLevel,与 selectConversation
         // 一致;否则删当前会话回落后这几项仍停留在已删会话,UI 显示错值。
+        cancelNewConversationInitializers()
         _currentConversationId.value = nextConversation.id
         _currentCharacterId.value = nextConversation.characterId
         _currentPersonaId.value = nextConversation.personaId
@@ -1449,6 +1480,7 @@ class ChatViewModel @Inject constructor(
         // 同步切到新会话锁定的 character / persona / preset id,与 nonArchivedConversations
         // 自动恢复路径一致。nextConversation 为 null 时不清:保留用户预选的"下一条新会话"。
         if (nextConversation != null) {
+            cancelNewConversationInitializers()
             _currentCharacterId.value = nextConversation.characterId
             _currentPersonaId.value = nextConversation.personaId
             _currentPresetId.value = nextConversation.presetId
@@ -2052,12 +2084,19 @@ class ChatViewModel @Inject constructor(
         return personas.firstOrNull { it.id == id && !it.isNonePersona }
     }
 
-    /**
-     * 默认身份的 id。设置中没设默认 / 默认指向"无"伪卡 → 返回 null,新会话语义上"无身份"。
-     */
-    private suspend fun resolveDefaultPersonaIdOrNull(): String? {
-        val defaultId = personaRepository.defaultPersonaId.first()
-        return defaultId.takeIf { it != UserPersona.NONE_PERSONA_ID }
+    private suspend fun resolveInitialPersonaIdForCharacter(characterId: String?): String {
+        return selectInitialPersonaIdForCharacter(
+            personas = personaRepository.personas.first(),
+            defaultPersonaId = personaRepository.defaultPersonaId.first(),
+            characterId = characterId,
+        )
+    }
+
+    private fun cancelNewConversationInitializers() {
+        newConversationPersonaJob?.cancel()
+        newConversationPersonaJob = null
+        newConversationPresetJob?.cancel()
+        newConversationPresetJob = null
     }
 
     /**
