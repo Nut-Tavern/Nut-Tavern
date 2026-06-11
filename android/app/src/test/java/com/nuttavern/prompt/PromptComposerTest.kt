@@ -332,6 +332,34 @@ class PromptComposerTest {
     }
 
     @Test
+    fun charDepthPromptPlaceholderIgnoresNonStringExtensionValue() {
+        val character = Character(
+            name = "Alice",
+            description = "Depth: {{charDepthPrompt}}",
+            extensions = buildJsonObject {
+                put("depth_prompt", buildJsonObject {
+                    put("prompt", 42)
+                })
+            },
+        )
+
+        val output = composer.compose(
+            PromptComposerInput(
+                userMessage = null,
+                history = emptyList(),
+                character = character,
+                userPersona = null,
+                preset = Preset.default(),
+            )
+        )
+
+        assertTrue(
+            "non-string charDepthPrompt should keep placeholder unresolved: ${output.systemPrompt}",
+            output.systemPrompt!!.contains("Depth: {{charDepthPrompt}}"),
+        )
+    }
+
+    @Test
     fun unknownPlaceholdersAreLeftIntact() {
         val output = composer.compose(
             PromptComposerInput(

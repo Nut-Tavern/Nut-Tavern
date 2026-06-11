@@ -288,6 +288,32 @@ class CharacterCardCodecTest {
     }
 
     @Test
+    fun exportPreservesUnparsedExtensionRegexScriptsWhenNoEditedScriptsExist() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "Broken Extension Regex Bot",
+                "extensions": {
+                  "regex_scripts": [42],
+                  "vendor": "external-tool"
+                }
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+        val exported = CharacterCardCodec.encodeToV3Json(decoded.character, decoded.embeddedBook)
+        val extensions = json.parseToJsonElement(exported)
+            .jsonObject["data"]!!.jsonObject["extensions"]!!.jsonObject
+
+        assertTrue(decoded.character.regexScripts.isEmpty())
+        assertEquals("external-tool", extensions["vendor"]!!.jsonPrimitive.content)
+        assertEquals("42", extensions["regex_scripts"]!!.jsonArray.single().jsonPrimitive.content)
+    }
+
+    @Test
     fun exportsSpecV3Header() {
         val decoded = CharacterCardCodec.decodeFromJson(
             buildCardJson(spec = "chara_card_v3", specVersion = "3.0", name = "Bot"),

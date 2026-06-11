@@ -7,7 +7,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 
 /**
  * 角色卡运行时数据模型,对齐 SillyTavern V3 card 的 `data` 主体。
@@ -100,7 +99,8 @@ data class Character(
  */
 fun Character.characterDepthPromptText(): String {
     val depthPrompt = extensions[CHARACTER_DEPTH_PROMPT_EXTENSION_KEY] as? JsonObject ?: return ""
-    return (depthPrompt[CHARACTER_DEPTH_PROMPT_TEXT_KEY] as? JsonPrimitive)?.contentOrNull.orEmpty()
+    val prompt = depthPrompt[CHARACTER_DEPTH_PROMPT_TEXT_KEY] as? JsonPrimitive ?: return ""
+    return if (prompt.isString) prompt.content else ""
 }
 
 private const val CHARACTER_DEPTH_PROMPT_EXTENSION_KEY = "depth_prompt"

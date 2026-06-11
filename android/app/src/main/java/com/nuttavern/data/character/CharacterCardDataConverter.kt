@@ -137,10 +137,17 @@ internal object CharacterCardDataConverter {
                 ListSerializer(RegexScript.serializer()),
                 character.regexScripts,
             )
-        } else if (extensions[KEY_REGEX_SCRIPTS] is JsonArray) {
+        } else if (isDecodableRegexScriptsArray(extensions[KEY_REGEX_SCRIPTS], json)) {
             extensions.remove(KEY_REGEX_SCRIPTS)
         }
         return JsonObject(extensions)
+    }
+
+    private fun isDecodableRegexScriptsArray(element: JsonElement?, json: Json): Boolean {
+        if (element !is JsonArray) return false
+        return runCatching {
+            json.decodeFromJsonElement(ListSerializer(RegexScript.serializer()), element)
+        }.isSuccess
     }
 
     /**
