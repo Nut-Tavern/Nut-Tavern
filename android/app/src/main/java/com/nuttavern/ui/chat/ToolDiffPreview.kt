@@ -6,11 +6,9 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,9 +25,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import com.composables.icons.lucide.Lucide
@@ -87,9 +90,72 @@ private fun DiffEntryCard(entry: ToolDiffEntry) {
             )
         }
         entry.fields.forEach { field ->
-            DiffFieldContainer(field)
+            if (isInlineField(field)) {
+                InlineDiffField(field)
+            } else {
+                DiffFieldContainer(field)
+            }
         }
     }
+}
+
+/**
+ * 判定字段能否走内联紧凑渲染(单 Text + buildAnnotatedString)而非带行号槽的代码块。
+ *
+ * 只看 diff 结构而非字符长度:单一 hunk、无省略上下文、无 CONTEXT 行、最多一旧一新,
+ * 即纯增 / 纯删 / 单值替换。这样关键词这类"很长但仍是单行"的字段也能内联自动换行,
+ * 不会因长度被打回只能横向滚动的代码块。多行正文 / 含上下文的局部修改仍走代码块。
+ */
+private fun isInlineField(field: ToolDiffField): Boolean {
+    if (field.hasTrailingGap) return false
+    val hunk = field.hunks.singleOrNull() ?: return false
+    if (hunk.precededByGap) return false
+    if (hunk.lines.any { it.kind == DiffLineKind.CONTEXT }) return false
+    return hunk.lines.size <= 2
+}
+
+@Composable
+private fun InlineDiffField(field: ToolDiffField) {
+    val palette = if (isSystemInDarkTheme()) DarkDiffPalette else LightDiffPalette
+    val oldText = field.hunks.firstOrNull()?.lines
+        ?.firstOrNull { it.kind == DiffLineKind.REMOVED }?.text
+    val newText = field.hunks.firstOrNull()?.lines
+        ?.firstOrNull { it.kind == DiffLineKind.ADDED }?.text
+
+    val removedStyle = SpanStyle(
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        background = palette.remove.copy(alpha = palette.fillAlpha),
+        textDecoration = TextDecoration.LineThrough,
+    )
+    val addedStyle = SpanStyle(
+        color = palette.add,
+        background = palette.add.copy(alpha = palette.fillAlpha),
+    )
+    val nameStyle = SpanStyle(
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontWeight = FontWeight.Medium,
+    )
+
+    // 纯增 / 纯删不带箭头(避免出现 " ➔ 新值" 这类像数据缺失的歧义);只有增删都在时才写箭头。
+    val content = buildAnnotatedString {
+        withStyle(nameStyle) { append(field.name) }
+        append("  ")
+        if (oldText != null) withStyle(removedStyle) { append(oldText) }
+        if (oldText != null && newText != null) {
+            withStyle(SpanStyle(color = MaterialTheme.colorScheme.onSurfaceVariant)) {
+                append("  \u2794  ")
+            }
+        }
+        if (newText != null) withStyle(addedStyle) { append(newText) }
+    }
+
+    Text(
+        text = content,
+        style = MaterialTheme.typography.bodyMedium,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+    )
 }
 
 @Composable
@@ -122,20 +188,18 @@ private fun DiffFieldBody(field: ToolDiffField) {
         lineHeight = 1.6.em,
     )
 
-    // BoxWithConstraints 拿可视宽度;内层 defaultMinSize 让短行的高亮背景也铺满整行宽。
-    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-        val minRowWidth = maxWidth
-        Box(modifier = Modifier.fillMaxWidth().horizontalScroll(sharedScroll)) {
-            Column(modifier = Modifier.width(IntrinsicSize.Max).defaultMinSize(minWidth = minRowWidth)) {
-                field.hunks.forEach { hunk ->
-                    if (hunk.precededByGap) {
-                        HunkSeparator()
-                    }
-                    hunk.lines.forEach { line -> DiffLineRow(line, lineStyle, palette) }
-                }
-                if (field.hasTrailingGap) {
+    // 只做横向滚动:宽度取最宽行,行背景铺满该宽度。不用 BoxWithConstraints(SubcomposeLayout
+    // 嵌在抽屉 verticalScroll 里会干扰纵向滚动测量,导致抽屉滑不动)。
+    Box(modifier = Modifier.fillMaxWidth().horizontalScroll(sharedScroll)) {
+        Column(modifier = Modifier.width(IntrinsicSize.Max)) {
+            field.hunks.forEach { hunk ->
+                if (hunk.precededByGap) {
                     HunkSeparator()
                 }
+                hunk.lines.forEach { line -> DiffLineRow(line, lineStyle, palette) }
+            }
+            if (field.hasTrailingGap) {
+                HunkSeparator()
             }
         }
     }
