@@ -13,11 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.material3.Text
@@ -98,40 +95,27 @@ internal fun ChatMessageRow(
         )
     }
 
-    // 进场动画:每条消息首次出现时 slide(从下半程上移) + fade。
-    // MutableTransitionState 初值 false、首帧切 true 触发一次性进场,key 绑 message.id
-    // 保证切会话 / 新消息各自只播一次,已存在的旧消息重组时不重播。
-    val enterTransition = remember(message.id) {
-        MutableTransitionState(false).apply { targetState = true }
-    }
-
-    AnimatedVisibility(
-        visibleState = enterTransition,
-        enter = slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(),
-        exit = fadeOut(),
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(
+                start = MESSAGE_ROW_HORIZONTAL_PADDING,
+                end = MESSAGE_ROW_HORIZONTAL_PADDING,
+            ),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(
-                    start = MESSAGE_ROW_HORIZONTAL_PADDING,
-                    end = MESSAGE_ROW_HORIZONTAL_PADDING,
-                ),
-        ) {
-            if (isUserMessage) {
-                UserMessageContent(
-                    message = message,
-                    maxMessageWidth = maxMessageWidth,
-                    alignment = alignment,
-                    longPressModifier = longPressModifier,
-                )
-            } else {
-                AssistantMessageContent(
-                    message = message,
-                    toolDisplayName = toolDisplayName,
-                    longPressModifier = longPressModifier,
-                )
-            }
+        if (isUserMessage) {
+            UserMessageContent(
+                message = message,
+                maxMessageWidth = maxMessageWidth,
+                alignment = alignment,
+                longPressModifier = longPressModifier,
+            )
+        } else {
+            AssistantMessageContent(
+                message = message,
+                toolDisplayName = toolDisplayName,
+                longPressModifier = longPressModifier,
+            )
         }
     }
 

@@ -1,5 +1,7 @@
 package com.nuttavern.ui.chat
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -30,12 +32,14 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
@@ -213,11 +217,24 @@ private fun ChatMessageListContent(
     // 这条路径不依赖 isAtBottom,也不依赖 index,与 IME 动画同帧。
     ImeLazyListAutoScroller(listState)
 
+    // 列表级一次性淡入:进对话 / 切会话 / 开屏时整列表淡入一次。
+    // 放在列表容器上(而非每条消息)是关键 —— per-item 动画会随 LazyColumn 回收复用重播,
+    // 往上翻历史时每条又淡一遍;容器级只在本 Composable 首次组合时播一次。
+    // key(conversationId)(见上层)保证切会话时容器重建、淡入重新触发。
+    var listVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { listVisible = true }
+    val listAlpha by animateFloatAsState(
+        targetValue = if (listVisible) 1f else 0f,
+        animationSpec = tween(durationMillis = 240),
+        label = "ChatListFadeIn",
+    )
+
     Box(modifier = modifier) {
         LazyColumn(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .alpha(listAlpha)
                 .padding(top = innerPadding.calculateTopPadding()),
             contentPadding = PaddingValues(
                 top = 8.dp,
