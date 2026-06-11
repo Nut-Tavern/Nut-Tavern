@@ -6,7 +6,9 @@ import com.nuttavern.data.lorebook.LorebookEntry
 import com.nuttavern.data.lorebook.LorebookRepository
 import com.nuttavern.network.ChatTool
 import com.nuttavern.network.ToolApprovalDetails
-import com.nuttavern.network.ToolApprovalSection
+import com.nuttavern.network.ToolDiffEntry
+import com.nuttavern.network.ToolDiffField
+import com.nuttavern.network.ToolDiffType
 import com.nuttavern.network.ToolContext
 import kotlinx.coroutines.flow.first
 import org.json.JSONArray
@@ -190,7 +192,7 @@ class LorebookWriteTools @Inject constructor(
         }
         return ToolApprovalDetails(
             description = "目标世界书：${latestBook.displayNameForApproval()}；将执行 ${editsArray.length()} 项编辑。",
-            sections = diff,
+            diffs = diff,
             warnings = warnings,
         )
     }
@@ -207,10 +209,11 @@ class LorebookWriteTools @Inject constructor(
         val name = book?.displayNameForApproval() ?: lorebookId
         return ToolApprovalDetails(
             description = "将撤销世界书「$name」的上一次工具编辑，并恢复到编辑前的整书条目快照。",
-            sections = listOf(
-                ToolApprovalSection(
-                    title = "回滚范围",
-                    lines = listOf("恢复整本世界书条目列表", "当前可撤销步数：${editHistory.depth(lorebookId)}"),
+            diffs = listOf(
+                ToolDiffEntry(
+                    title = "恢复整本世界书条目列表",
+                    type = ToolDiffType.STATUS,
+                    fields = listOf(ToolDiffField("当前可撤销步数", null, editHistory.depth(lorebookId).toString())),
                 ),
             ),
             warnings = if (book == null) listOf("该世界书不在当前对话已启用集合内，调用会被拒绝。") else emptyList(),
@@ -488,15 +491,12 @@ private fun entrySummaryJson(entry: LorebookEntry): JSONObject =
 private fun Lorebook.displayNameForApproval(): String = name.ifBlank { id }
 
 /**
- * 把 before_after JSON 转成确认弹窗使用的可读 diff 预览。
+ * 把 before_after JSON 转成确认弹窗使用的结构化 diff 数据。
  *
- * 目标是接近编程 CLI 的变更预览:新增 / 删除 / 修改 / 启停分组列出,避免用户只能看原始 JSON。
+ * 目标是接近编程 CLI 的变更预览:新增 / 删除 / 修改 / 启停分类,提供上下行差异。
  */
-internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<ToolApprovalSection> {
-    val created = mutableListOf<String>()
-    val deleted = mutableListOf<String>()
-    val statusChanges = mutableListOf<String>()
-    val modified = mutableListOf<String>()
+internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<ToolDiffEntry> {
+    val diffs = mutableListOf<ToolDiffEntry>()
 
     for (i in 0 until beforeAfterJson.length()) {
         val change = beforeAfterJson.optJSONObject(i) ?: continue
@@ -508,31 +508,46 @@ internal fun buildLorebookEditDiffSections(beforeAfterJson: JSONArray): List<Too
 
         when {
             beforeValue == JSONObject.NULL && after != null -> {
-                created += "uid=$uid ${entryTitle(after)}；关键词 ${formatJsonArray(after.optJSONArray("key"))}；正文 ${previewText(after.optString("content"))}"
+                diffs += ToolDiffEntry(
+                    title = "uid=$uid ${entryTitle(after)}",
+                    type = ToolDiffType.ADDED,
+                    fields = listOf(
+                        ToolDiffField("关键词", null, formatJsonArray(after.optJSONArray("key"))),
+                        ToolDiffField("正文", null, previewText(after.optString("content"))),
+                    ),
+                )
             }
             before != null && afterValue == JSONObject.NULL -> {
-                deleted += "uid=$uid ${entryTitle(before)}"
+                diffs += ToolDiffEntry(
+                    title = "uid=$uid ${entryTitle(before)}",
+                    type = ToolDiffType.DELETED,
+                )
             }
             isOnlyEnabledChange(before, after) -> {
-                statusChanges += "uid=$uid：${before!!.optBoolean("enabled")} → ${after!!.optBoolean("enabled")}"
+                diffs += ToolDiffEntry(
+                    title = "uid=$uid ${entryTitle(after!!)}",
+                    type = ToolDiffType.STATUS,
+                    fields = listOf(
+                        ToolDiffField(
+                            name = "启用状态",
+                            before = before!!.optBoolean("enabled").toString(),
+                            after = after.optBoolean("enabled").toString(),
+                        ),
+                    ),
+                )
             }
             before != null && after != null -> {
-                val lines = changedFieldLines(before, after)
-                if (lines.isEmpty()) {
-                    modified += "uid=$uid ${entryTitle(after)}：无字段变化"
-                } else {
-                    modified += "uid=$uid ${entryTitle(after)}：${lines.joinToString("；")}"
-                }
+                val fields = changedFields(before, after)
+                diffs += ToolDiffEntry(
+                    title = "uid=$uid ${entryTitle(after)}",
+                    type = ToolDiffType.MODIFIED,
+                    fields = fields,
+                )
             }
         }
     }
 
-    return buildList {
-        if (created.isNotEmpty()) add(ToolApprovalSection("新增条目", created))
-        if (modified.isNotEmpty()) add(ToolApprovalSection("修改条目", modified))
-        if (statusChanges.isNotEmpty()) add(ToolApprovalSection("启用状态", statusChanges))
-        if (deleted.isNotEmpty()) add(ToolApprovalSection("删除条目", deleted))
-    }
+    return diffs
 }
 
 private fun isOnlyEnabledChange(before: JSONObject?, after: JSONObject?): Boolean {
@@ -540,13 +555,60 @@ private fun isOnlyEnabledChange(before: JSONObject?, after: JSONObject?): Boolea
     return before.length() == 1 && after.length() == 1 && before.has("enabled") && after.has("enabled")
 }
 
-private fun changedFieldLines(before: JSONObject, after: JSONObject): List<String> {
+private fun changedFields(before: JSONObject, after: JSONObject): List<ToolDiffField> {
     val fields = listOf("comment", "key", "enabled", "content")
     return fields.mapNotNull { field ->
-        val beforeText = jsonValueForPreview(before, field)
-        val afterText = jsonValueForPreview(after, field)
-        if (beforeText == afterText) null else "$field: $beforeText → $afterText"
+        if (field == "content") {
+            val beforeText = before.optString(field)
+            val afterText = after.optString(field)
+            if (beforeText == afterText) return@mapNotNull null
+            val (previewBefore, previewAfter) = extractDiffContext(beforeText, afterText)
+            ToolDiffField(field, previewBefore, previewAfter)
+        } else {
+            val beforeText = jsonValueForPreview(before, field)
+            val afterText = jsonValueForPreview(after, field)
+            if (beforeText == afterText) null else ToolDiffField(field, beforeText, afterText)
+        }
     }
+}
+
+/**
+ * 提取长文本差异上下文:截取修改位置前后各保留一段文本,用 `...` 省略无关部分。
+ */
+internal fun extractDiffContext(before: String, after: String, contextLength: Int = 15): Pair<String, String> {
+    var prefixLen = 0
+    while (prefixLen < before.length && prefixLen < after.length && before[prefixLen] == after[prefixLen]) {
+        prefixLen++
+    }
+    
+    var suffixLen = 0
+    while (suffixLen < before.length - prefixLen && suffixLen < after.length - prefixLen && 
+        before[before.length - 1 - suffixLen] == after[after.length - 1 - suffixLen]) {
+        suffixLen++
+    }
+
+    val beforeDiff = before.substring(prefixLen, before.length - suffixLen)
+    val afterDiff = after.substring(prefixLen, after.length - suffixLen)
+
+    val prefixStart = (prefixLen - contextLength).coerceAtLeast(0)
+    val prefix = before.substring(prefixStart, prefixLen).replace(Regex("\\s+"), " ")
+    val prefixDot = if (prefixStart > 0) "..." else ""
+
+    val beforeSuffixEnd = (before.length - suffixLen + contextLength).coerceAtMost(before.length)
+    val beforeSuffix = before.substring(before.length - suffixLen, beforeSuffixEnd).replace(Regex("\\s+"), " ")
+    val beforeSuffixDot = if (beforeSuffixEnd < before.length) "..." else ""
+    
+    val afterSuffixEnd = (after.length - suffixLen + contextLength).coerceAtMost(after.length)
+    val afterSuffix = after.substring(after.length - suffixLen, afterSuffixEnd).replace(Regex("\\s+"), " ")
+    val afterSuffixDot = if (afterSuffixEnd < after.length) "..." else ""
+
+    val cleanBeforeDiff = beforeDiff.replace(Regex("\\s+"), " ")
+    val cleanAfterDiff = afterDiff.replace(Regex("\\s+"), " ")
+
+    val previewBefore = "$prefixDot$prefix[-$cleanBeforeDiff-]$beforeSuffix$beforeSuffixDot"
+    val previewAfter = "$prefixDot$prefix[+$cleanAfterDiff+]$afterSuffix$afterSuffixDot"
+    
+    return previewBefore to previewAfter
 }
 
 private fun jsonValueForPreview(json: JSONObject, field: String): String = when (field) {

@@ -47,6 +47,9 @@ import com.composables.icons.lucide.Wrench
 import com.nuttavern.data.model.MessagePart
 import com.nuttavern.ui.chat.markdown.ChatMarkdown
 import com.nuttavern.ui.components.NutTavernSheetTitle
+import org.json.JSONObject
+import org.json.JSONArray
+import com.nuttavern.network.tools.buildLorebookEditDiffSections
 
 /**
  * 一组连续工具调用的合并折叠卡。视觉与 [ChatReasoningBlock] 折叠态对齐:
@@ -296,6 +299,23 @@ private fun ToolCallDetailSheet(
                 description = displayName,
             )
             Spacer(modifier = Modifier.height(8.dp))
+
+            // 如果是世界书编辑且包含 before_after，优先展示友好的 diff。
+            if (toolCall.toolName == "apply_lorebook_edits") {
+                val beforeAfter = runCatching {
+                    JSONObject(toolCall.result).optJSONArray("before_after")
+                }.getOrNull()
+                if (beforeAfter != null && beforeAfter.length() > 0) {
+                    Text(
+                        text = "修改预览",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    ToolDiffPreview(diffs = buildLorebookEditDiffSections(beforeAfter))
+                    Spacer(modifier = Modifier.height(16.dp))
+                }
+            }
 
             ToolCallJsonSection(label = "调用参数", json = toolCall.arguments)
             Spacer(modifier = Modifier.height(16.dp))

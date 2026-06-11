@@ -1,6 +1,8 @@
 package com.nuttavern.ui.chat
 
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.unit.dp
@@ -190,20 +192,10 @@ internal fun ToolApprovalDialog(
                             modifier = Modifier.padding(top = 8.dp),
                         )
                     }
-                    details.sections.forEach { section ->
-                        Text(
-                            text = section.title,
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(top = 10.dp),
-                        )
-                        section.lines.forEach { line ->
-                            Text(
-                                text = "• $line",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(top = 2.dp),
-                            )
-                        }
+                    if (details.diffs.isNotEmpty()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        ToolDiffPreview(diffs = details.diffs)
+                        Spacer(modifier = Modifier.height(8.dp))
                     }
                     details.warnings.forEach { warning ->
                         Text(

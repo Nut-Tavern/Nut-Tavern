@@ -2,6 +2,7 @@ package com.nuttavern.network.tools
 
 import com.nuttavern.data.lorebook.Lorebook
 import com.nuttavern.data.lorebook.LorebookEntry
+import com.nuttavern.network.ToolDiffType
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -213,7 +214,7 @@ class LorebookWriteToolsTest {
     }
 
     @Test
-    fun buildLorebookEditDiffSections_groupsCreateUpdateStatusAndDelete() {
+    fun buildLorebookEditDiffSections_mapsToCorrectToolDiffTypes() {
         val plan = planLorebookEdits(
             book,
             edits(
@@ -231,11 +232,11 @@ class LorebookWriteToolsTest {
         )
         assertNull(plan.error)
 
-        val sections = buildLorebookEditDiffSections(plan.beforeAfterJson)
-        val titles = sections.map { it.title }
-        assertTrue("应包含新增条目分组", "新增条目" in titles)
-        assertTrue("应包含修改条目分组", "修改条目" in titles)
-        assertTrue("应包含启用状态分组", "启用状态" in titles)
-        assertTrue("应包含删除条目分组", "删除条目" in titles)
+        val diffs = buildLorebookEditDiffSections(plan.beforeAfterJson)
+        val types = diffs.map { it.type }
+        assertTrue("应包含 ADDED", ToolDiffType.ADDED in types)
+        assertTrue("应包含 MODIFIED", ToolDiffType.MODIFIED in types)
+        assertTrue("应包含 STATUS", ToolDiffType.STATUS in types)
+        assertTrue("应包含 DELETED", ToolDiffType.DELETED in types)
     }
 }
