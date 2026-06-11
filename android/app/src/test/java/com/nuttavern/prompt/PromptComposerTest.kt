@@ -7,6 +7,8 @@ import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.Preset
 import com.nuttavern.network.ChatMessage
 import com.nuttavern.regex.RegexEngine
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -299,6 +301,34 @@ class PromptComposerTest {
             output.systemPrompt!!.contains("I am Alice, talking to Bob"),
         )
         assertEquals("Hello Alice", output.messages.last().content)
+    }
+
+    @Test
+    fun charDepthPromptPlaceholderReadsCharacterExtension() {
+        val character = Character(
+            name = "Alice",
+            description = "Depth: {{charDepthPrompt}}",
+            extensions = buildJsonObject {
+                put("depth_prompt", buildJsonObject {
+                    put("prompt", "hidden depth prompt")
+                })
+            },
+        )
+
+        val output = composer.compose(
+            PromptComposerInput(
+                userMessage = null,
+                history = emptyList(),
+                character = character,
+                userPersona = null,
+                preset = Preset.default(),
+            )
+        )
+
+        assertTrue(
+            "charDepthPrompt was not resolved from extensions: ${output.systemPrompt}",
+            output.systemPrompt!!.contains("Depth: hidden depth prompt"),
+        )
     }
 
     @Test

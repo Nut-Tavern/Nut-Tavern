@@ -5,7 +5,9 @@ import java.util.UUID
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * 角色卡运行时数据模型,对齐 SillyTavern V3 card 的 `data` 主体。
@@ -90,3 +92,16 @@ data class Character(
         val VERBOSITY_PRESETS: List<String> = listOf("", "low", "medium", "high")
     }
 }
+
+/**
+ * 读取 V3 `data.extensions.depth_prompt.prompt`。
+ *
+ * `extensions` 仍作为 JsonObject 原样存盘;这里只有世界书扫描 / 占位符需要读取已兼容字段时做窄口径解析。
+ */
+fun Character.characterDepthPromptText(): String {
+    val depthPrompt = extensions[CHARACTER_DEPTH_PROMPT_EXTENSION_KEY] as? JsonObject ?: return ""
+    return (depthPrompt[CHARACTER_DEPTH_PROMPT_TEXT_KEY] as? JsonPrimitive)?.contentOrNull.orEmpty()
+}
+
+private const val CHARACTER_DEPTH_PROMPT_EXTENSION_KEY = "depth_prompt"
+private const val CHARACTER_DEPTH_PROMPT_TEXT_KEY = "prompt"

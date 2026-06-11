@@ -1,6 +1,7 @@
 package com.nuttavern.prompt
 
 import com.nuttavern.data.character.Character
+import com.nuttavern.data.character.characterDepthPromptText
 import com.nuttavern.data.persona.PersonaPosition
 import com.nuttavern.data.persona.UserPersona
 import com.nuttavern.data.preset.GenerationType
@@ -477,6 +478,7 @@ class PromptComposer @Inject constructor(
             persona = personaDescription,
             charPrompt = character?.systemPrompt?.takeIf { it.isNotBlank() },
             charJailbreak = character?.postHistoryInstructions?.takeIf { it.isNotBlank() },
+            charDepthPrompt = character?.characterDepthPromptText()?.takeIf { it.isNotBlank() },
             mesExamplesRaw = character?.messageExample?.takeIf { it.isNotBlank() },
             charVersion = character?.characterVersion?.takeIf { it.isNotBlank() },
             creatorNotes = character?.creatorNotes?.takeIf { it.isNotBlank() },

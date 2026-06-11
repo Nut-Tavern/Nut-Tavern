@@ -1,6 +1,7 @@
 package com.nuttavern.data.character
 
 import com.nuttavern.data.character.io.PngTextChunk
+import com.nuttavern.data.regex.RegexScript
 import java.util.zip.CRC32
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -106,6 +107,44 @@ class CharacterCardCodecTest {
     }
 
     @Test
+    fun decodesStringListFieldsFromStrings() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "String Lists",
+                "alternate_greetings": "Hello from string",
+                "tags": "mage, tavern，friend"
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+
+        assertEquals(listOf("Hello from string"), decoded.character.alternateGreetings)
+        assertEquals(listOf("mage", "tavern", "friend"), decoded.character.tags)
+    }
+
+    @Test
+    fun fillsDefaultNameWhenCardNameIsMissingOrBlank() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "   ",
+                "description": "missing usable name"
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+
+        assertEquals("未命名角色", decoded.character.name)
+    }
+
+    @Test
     fun keepsUnmodeledDataFieldsInRawCardData() {
         val v3 = """
             {
@@ -162,6 +201,90 @@ class CharacterCardCodecTest {
         val data = json.parseToJsonElement(exported).jsonObject["data"]!!.jsonObject
 
         assertEquals("New Name", data["name"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun exportReflectsEditedRegexScripts() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "Regex Bot",
+                "extensions": {
+                  "regex_scripts": [
+                    { "id": "old", "scriptName": "Old", "findRegex": "/old/g", "replaceString": "" }
+                  ]
+                }
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+        val edited = decoded.character.copy(
+            regexScripts = listOf(
+                RegexScript(
+                    id = "new",
+                    scriptName = "New",
+                    findRegex = "/new/g",
+                    replaceString = "replacement",
+                )
+            ),
+        )
+        val exported = CharacterCardCodec.encodeToV3Json(edited, decoded.embeddedBook)
+        val data = json.parseToJsonElement(exported).jsonObject["data"]!!.jsonObject
+        val scripts = data["extensions"]!!.jsonObject["regex_scripts"]!!.jsonArray
+
+        assertEquals(1, scripts.size)
+        assertEquals("new", scripts[0].jsonObject["id"]!!.jsonPrimitive.content)
+        assertNull("酒馆角色正则应写入 extensions.regex_scripts,不应写顶层", data["regex_scripts"])
+        assertNull("已兼容字段不应留在 rawCardData", decoded.character.rawCardData?.get("regex_scripts"))
+    }
+
+    @Test
+    fun importLegacyTopLevelRegexScriptsExportsToExtensions() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "Legacy Regex Bot",
+                "regex_scripts": [
+                  { "id": "legacy", "scriptName": "Legacy", "findRegex": "/x/g", "replaceString": "y" }
+                ]
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+        val exported = CharacterCardCodec.encodeToV3Json(decoded.character, decoded.embeddedBook)
+        val data = json.parseToJsonElement(exported).jsonObject["data"]!!.jsonObject
+        val scripts = data["extensions"]!!.jsonObject["regex_scripts"]!!.jsonArray
+
+        assertEquals("legacy", decoded.character.regexScripts.single().id)
+        assertEquals("legacy", scripts.single().jsonObject["id"]!!.jsonPrimitive.content)
+        assertNull(data["regex_scripts"])
+    }
+
+    @Test
+    fun exportPreservesUnparsedRegexScriptsWhenNoEditedScriptsExist() {
+        val card = """
+            {
+              "spec": "chara_card_v3",
+              "spec_version": "3.0",
+              "data": {
+                "name": "Broken Regex Bot",
+                "regex_scripts": { "unexpected": "object" }
+              }
+            }
+        """.trimIndent()
+
+        val decoded = CharacterCardCodec.decodeFromJson(card)
+        val exported = CharacterCardCodec.encodeToV3Json(decoded.character, decoded.embeddedBook)
+        val data = json.parseToJsonElement(exported).jsonObject["data"]!!.jsonObject
+
+        assertTrue(decoded.character.regexScripts.isEmpty())
+        assertEquals("object", data["regex_scripts"]!!.jsonObject["unexpected"]!!.jsonPrimitive.content)
     }
 
     @Test

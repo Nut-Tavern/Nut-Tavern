@@ -2,13 +2,9 @@ package com.nuttavern.data.character
 
 import com.nuttavern.data.character.io.PngTextChunk
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 角色卡 JSON / PNG 编解码。**对齐酒馆 `src/endpoints/characters.js` + `character-card-parser.js`**。
@@ -38,21 +34,8 @@ object CharacterCardCodec {
     private const val SPEC_V2 = "chara_card_v2"
     private const val SPEC_VERSION_V2 = "2.0"
 
-    private const val KEY_SPEC = "spec"
-    private const val KEY_SPEC_VERSION = "spec_version"
-    private const val KEY_DATA = "data"
-    private const val KEY_CHARACTER_BOOK = "character_book"
-
     private const val PNG_CHUNK_V3 = "ccv3"
     private const val PNG_CHUNK_V2 = "chara"
-
-    /** [Character] 已建模的 V3 data 顶层键。导出时这些键由角色当前字段覆盖,其余从 rawCardData 回填。 */
-    private val MODELED_DATA_KEYS = setOf(
-        "name", "description", "personality", "scenario",
-        "first_mes", "mes_example", "system_prompt", "post_history_instructions",
-        "alternate_greetings", "creator", "character_version", "creator_notes",
-        "tags", "extensions", "character_book",
-    )
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -75,8 +58,9 @@ object CharacterCardCodec {
             .getOrNull() as? JsonObject
             ?: throw IllegalArgumentException("角色卡不是合法的 JSON 对象")
 
-        val data = resolveDataObject(root)
-        return decodeFromDataObject(data)
+        val data = CharacterCardDataConverter.resolveDataObject(root)
+        val decoded = CharacterCardDataConverter.decodeDataObject(data, json)
+        return DecodedCard(decoded.character, decoded.embeddedBook)
     }
 
     /**
@@ -103,27 +87,27 @@ object CharacterCardCodec {
      *                     传 null 则不写 character_book(角色没有内嵌世界书)。
      */
     fun encodeToV3Json(character: Character, embeddedBook: CharacterBook?): String {
-        val data = buildDataObject(character, embeddedBook)
+        val data = CharacterCardDataConverter.buildDataObject(character, embeddedBook, json)
         val card = buildJsonObject {
-            put(KEY_SPEC, JsonPrimitive(SPEC_V3))
-            put(KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V3))
-            put(KEY_DATA, data)
+            put(CharacterCardDataConverter.KEY_SPEC, JsonPrimitive(SPEC_V3))
+            put(CharacterCardDataConverter.KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V3))
+            put(CharacterCardDataConverter.KEY_DATA, data)
         }
         return json.encodeToString(JsonObject.serializer(), card)
     }
 
     /** 把角色编码成 PNG 字节,基于 [baseImage] 双写 chara(V2) + ccv3(V3) chunk。 */
     fun encodeToPng(character: Character, embeddedBook: CharacterBook?, baseImage: ByteArray): ByteArray {
-        val data = buildDataObject(character, embeddedBook)
+        val data = CharacterCardDataConverter.buildDataObject(character, embeddedBook, json)
         val v3Card = buildJsonObject {
-            put(KEY_SPEC, JsonPrimitive(SPEC_V3))
-            put(KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V3))
-            put(KEY_DATA, data)
+            put(CharacterCardDataConverter.KEY_SPEC, JsonPrimitive(SPEC_V3))
+            put(CharacterCardDataConverter.KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V3))
+            put(CharacterCardDataConverter.KEY_DATA, data)
         }
         val v2Card = buildJsonObject {
-            put(KEY_SPEC, JsonPrimitive(SPEC_V2))
-            put(KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V2))
-            put(KEY_DATA, data)
+            put(CharacterCardDataConverter.KEY_SPEC, JsonPrimitive(SPEC_V2))
+            put(CharacterCardDataConverter.KEY_SPEC_VERSION, JsonPrimitive(SPEC_VERSION_V2))
+            put(CharacterCardDataConverter.KEY_DATA, data)
         }
         val encoder = java.util.Base64.getEncoder()
         val v3Base64 = encoder.encodeToString(
@@ -139,90 +123,4 @@ object CharacterCardCodec {
         )
     }
 
-    /**
-     * 三态识别:返回用于解析的 V3 data 对象。
-     * - 无 spec → V1 卡,顶层字段升级成 data;
-     * - 有 spec → 取 root.data(V2 / V3 同构)。
-     */
-    private fun resolveDataObject(root: JsonObject): JsonObject {
-        val spec = root[KEY_SPEC]?.jsonPrimitive?.contentOrNull
-        if (spec == null) {
-            return upgradeV1ToData(root)
-        }
-        return root[KEY_DATA] as? JsonObject
-            ?: throw IllegalArgumentException("角色卡 spec=$spec 但缺少 data 对象")
-    }
-
-    /**
-     * V1 卡升级:顶层平铺字段重组成 V3 data 结构(对齐 charaFormatData:565)。
-     * V1 的 `creatorcomment` 映射成 `creator_notes`;`talkativeness` / `fav` 进 `extensions` 子对象
-     * (对齐酒馆 `data.extensions.talkativeness` / `data.extensions.fav`)。V1 没有的字段交给
-     * [decodeFromDataObject] 走默认值。
-     */
-    private fun upgradeV1ToData(root: JsonObject): JsonObject = buildJsonObject {
-        copyStringField(root, this, from = "name", to = "name")
-        copyStringField(root, this, from = "description", to = "description")
-        copyStringField(root, this, from = "personality", to = "personality")
-        copyStringField(root, this, from = "scenario", to = "scenario")
-        copyStringField(root, this, from = "first_mes", to = "first_mes")
-        copyStringField(root, this, from = "mes_example", to = "mes_example")
-        copyStringField(root, this, from = "creatorcomment", to = "creator_notes")
-        root["tags"]?.let { put("tags", it) }
-        val extensions = buildV1Extensions(root)
-        if (extensions.isNotEmpty()) put("extensions", JsonObject(extensions))
-    }
-
-    /** V1 顶层 talkativeness / fav 升级进 extensions(对齐 charaFormatData:615-616)。 */
-    private fun buildV1Extensions(root: JsonObject): Map<String, JsonElement> {
-        val extensions = LinkedHashMap<String, JsonElement>()
-        (root["talkativeness"] as? JsonPrimitive)?.let { extensions["talkativeness"] = it }
-        (root["fav"] as? JsonPrimitive)?.let { extensions["fav"] = it }
-        return extensions
-    }
-
-    private fun copyStringField(source: JsonObject, target: JsonObjectBuilder, from: String, to: String) {
-        val value = source[from]?.jsonPrimitive?.contentOrNull ?: return
-        target.put(to, JsonPrimitive(value))
-    }
-
-    private fun decodeFromDataObject(data: JsonObject): DecodedCard {
-        val character = json.decodeFromJsonElement(Character.serializer(), data)
-        val unmodeled = data.filterKeys { it !in MODELED_DATA_KEYS }
-        val rawCardData = if (unmodeled.isEmpty()) null else JsonObject(unmodeled)
-        return DecodedCard(
-            character = character.copy(rawCardData = rawCardData),
-            embeddedBook = decodeEmbeddedBook(data),
-        )
-    }
-
-    private fun decodeEmbeddedBook(data: JsonObject): CharacterBook? {
-        val bookElement = data[KEY_CHARACTER_BOOK] as? JsonObject ?: return null
-        return runCatching {
-            json.decodeFromJsonElement(CharacterBook.serializer(), bookElement)
-        }.getOrNull()
-    }
-
-    /**
-     * 构建导出用的 V3 data 对象:rawCardData 里的未建模键打底,再用角色当前已建模字段覆盖。
-     * 这样未建模字段(group_only_greetings 等)不丢,已建模字段始终是角色最新值。
-     */
-    private fun buildDataObject(character: Character, embeddedBook: CharacterBook?): JsonObject {
-        val modeled = json.encodeToJsonElement(Character.serializer(), character) as JsonObject
-        val merged = LinkedHashMap<String, JsonElement>()
-        // 1) 未建模键打底(只取 rawCardData 中不属于已建模集合的键,防止过期已建模值覆盖)
-        character.rawCardData?.forEach { (key, value) ->
-            if (key !in MODELED_DATA_KEYS) merged[key] = value
-        }
-        // 2) 已建模字段覆盖(排除 Character 的内部 / 非 V3 字段)
-        modeled.forEach { (key, value) ->
-            if (key in MODELED_DATA_KEYS) merged[key] = value
-        }
-        // 3) character_book 用导出链路提供的内嵌世界书;无则移除该键
-        if (embeddedBook != null) {
-            merged[KEY_CHARACTER_BOOK] = json.encodeToJsonElement(CharacterBook.serializer(), embeddedBook)
-        } else {
-            merged.remove(KEY_CHARACTER_BOOK)
-        }
-        return JsonObject(merged)
-    }
 }

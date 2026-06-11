@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nuttavern.data.character.Character
 import com.nuttavern.data.character.CharacterRepository
+import com.nuttavern.data.character.characterDepthPromptText
 import com.nuttavern.data.model.AssistantConfig
 import com.nuttavern.data.model.ChatRunMode
 import com.nuttavern.data.model.ConversationSummary
@@ -1984,7 +1985,7 @@ class ChatViewModel @Inject constructor(
             personaDescription = persona?.description.orEmpty(),
             characterDescription = character?.description.orEmpty(),
             characterPersonality = character?.personality.orEmpty(),
-            characterDepthPrompt = "", // V3 extensions.depth_prompt.prompt,当前未解析
+            characterDepthPrompt = character?.characterDepthPromptText().orEmpty(),
             scenario = character?.scenario.orEmpty(),
             creatorNotes = character?.creatorNotes.orEmpty(),
             maxContextTokens = preset.openaiMaxContext,
