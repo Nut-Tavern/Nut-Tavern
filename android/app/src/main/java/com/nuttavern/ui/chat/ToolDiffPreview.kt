@@ -7,6 +7,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
@@ -46,17 +50,19 @@ internal fun ToolDiffPreview(diffs: List<ToolDiffEntry>) {
 
 @Composable
 private fun DiffEntryCard(entry: ToolDiffEntry) {
-    val (headerBg, headerFg, icon) = when (entry.type) {
-        ToolDiffType.ADDED -> Triple(Color(0xFFE6F4EA), Color(0xFF1B5E20), Lucide.Plus)
-        ToolDiffType.DELETED -> Triple(Color(0xFFFCE8E6), Color(0xFFC62828), Lucide.Minus)
-        ToolDiffType.MODIFIED -> Triple(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.colorScheme.onSurface, Lucide.PenLine)
-        ToolDiffType.STATUS -> Triple(Color(0xFFFEF7E0), Color(0xFFE65100), Lucide.RefreshCcw)
+    val headerBg = MaterialTheme.colorScheme.surfaceContainerHighest
+    val headerFg = MaterialTheme.colorScheme.onSurface
+    val icon = when (entry.type) {
+        ToolDiffType.ADDED -> Lucide.Plus
+        ToolDiffType.DELETED -> Lucide.Minus
+        ToolDiffType.MODIFIED -> Lucide.PenLine
+        ToolDiffType.STATUS -> Lucide.RefreshCcw
     }
 
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
     ) {
         Column {
             Row(
@@ -72,8 +78,8 @@ private fun DiffEntryCard(entry: ToolDiffEntry) {
             }
             if (entry.fields.isNotEmpty()) {
                 Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(vertical = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     entry.fields.forEach { field ->
                         DiffFieldRow(field, entry.type)
@@ -86,23 +92,20 @@ private fun DiffEntryCard(entry: ToolDiffEntry) {
 
 @Composable
 private fun DiffFieldRow(field: ToolDiffField, type: ToolDiffType) {
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Text(
             text = field.name,
-            style = MaterialTheme.typography.labelMedium,
+            style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(bottom = 4.dp),
+            modifier = Modifier.padding(start = 12.dp, end = 12.dp, bottom = 4.dp),
         )
         when (type) {
             ToolDiffType.ADDED -> {
                 DiffLine(text = field.after ?: "", isAdd = true)
             }
             ToolDiffType.STATUS -> {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DiffLine(text = field.before ?: "", isAdd = false, modifier = Modifier.weight(1f))
-                    Icon(imageVector = Lucide.RefreshCcw, contentDescription = null, modifier = Modifier.size(14.dp))
-                    DiffLine(text = field.after ?: "", isAdd = true, modifier = Modifier.weight(1f))
-                }
+                DiffLine(text = field.before ?: "", isAdd = false)
+                DiffLine(text = field.after ?: "", isAdd = true)
             }
             else -> {
                 if (field.before != null) DiffLine(text = field.before, isAdd = false)
@@ -114,13 +117,15 @@ private fun DiffFieldRow(field: ToolDiffField, type: ToolDiffType) {
 
 @Composable
 private fun DiffLine(text: String, isAdd: Boolean, modifier: Modifier = Modifier) {
-    val bgColor = if (isAdd) Color(0xFFE6F4EA) else Color(0xFFFCE8E6)
-    val textColor = if (isAdd) Color(0xFF1B5E20) else Color(0xFFC62828)
+    // 现代 IDE 风格: 整行极淡背景(透明度 ~10%), 左侧固定宽度指示器带强对比色。
+    // 文本颜色跟随主题(不强行变红绿)。
+    val indicatorColor = if (isAdd) Color(0xFF4CAF50) else Color(0xFFF44336)
+    val rowBgColor = indicatorColor.copy(alpha = 0.1f)
+    val highlightBgColor = indicatorColor.copy(alpha = 0.35f)
+    val textColor = MaterialTheme.colorScheme.onSurface
 
     val annotated = buildAnnotatedString {
         if (isAdd && text.contains("[+") && text.contains("+]")) {
-            // 使用非正则的普通字符串拆分,因为带中括号和加号。
-            // 文本形如: "前文[+新增+]后文"
             var currentStr = text
             while (currentStr.isNotEmpty()) {
                 val startIdx = currentStr.indexOf("[+")
@@ -135,7 +140,7 @@ private fun DiffLine(text: String, isAdd: Boolean, modifier: Modifier = Modifier
                     break
                 }
                 val highlight = currentStr.substring(startIdx + 2, endIdx)
-                withStyle(SpanStyle(background = Color(0xFFC8E6C9), color = Color.Black)) {
+                withStyle(SpanStyle(background = highlightBgColor, color = textColor)) {
                     append(highlight)
                 }
                 currentStr = currentStr.substring(endIdx + 2)
@@ -155,7 +160,7 @@ private fun DiffLine(text: String, isAdd: Boolean, modifier: Modifier = Modifier
                     break
                 }
                 val highlight = currentStr.substring(startIdx + 2, endIdx)
-                withStyle(SpanStyle(background = Color(0xFFFFCDD2), color = Color.Black)) {
+                withStyle(SpanStyle(background = highlightBgColor, color = textColor)) {
                     append(highlight)
                 }
                 currentStr = currentStr.substring(endIdx + 2)
@@ -165,17 +170,25 @@ private fun DiffLine(text: String, isAdd: Boolean, modifier: Modifier = Modifier
         }
     }
 
-    Box(
+    Row(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(4.dp))
-            .background(bgColor)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
+            .background(rowBgColor)
+            .height(IntrinsicSize.Min),
     ) {
+        // 左侧指示条 (类似行号区的标记)
+        Box(
+            modifier = Modifier
+                .width(4.dp)
+                .fillMaxHeight()
+                .background(indicatorColor)
+        )
+        // 文本区
         Text(
             text = annotated,
             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
             color = textColor,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
         )
     }
 }
