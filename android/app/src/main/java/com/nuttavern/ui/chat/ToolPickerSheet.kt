@@ -24,6 +24,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.nuttavern.network.ChatTool
+import com.nuttavern.network.ToolUnit
+import com.nuttavern.network.buildToolUnits
 import com.nuttavern.ui.components.NutTavernSheetTitle
 import com.nuttavern.ui.regex.MultiSelectPickerCard
 
@@ -31,8 +33,8 @@ import com.nuttavern.ui.regex.MultiSelectPickerCard
  * 右侧栏的"内置工具选择"抽屉。
  *
  * 与世界书 / 正则选择抽屉同一形态:暂存每个工具在当前会话的启用状态,只有点"应用"才回写。
- * 下滑 / 点外部关闭 = 取消修改。卡片无左侧图标、无编辑键(内置工具不可编辑),只有名称、
- * 功能说明和启用开关。
+ * 下滑 / 点外部关闭 = 取消修改。同组工具合并成一张卡用一个总开关一起开关。展示顺序跟随
+ * 内置工具页拖动排序([toolOrder]),与设置页口径一致。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +42,7 @@ fun ToolPickerSheet(
     visible: Boolean,
     tools: List<ChatTool>,
     enabledToolIds: Set<String>,
+    toolOrder: List<String>,
     onApply: (enabledToolIds: Set<String>) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -76,6 +79,7 @@ fun ToolPickerSheet(
                     modifier = Modifier.padding(vertical = 24.dp),
                 )
             } else {
+                val units = remember(tools, toolOrder) { buildToolUnits(tools, toolOrder) }
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -83,14 +87,16 @@ fun ToolPickerSheet(
                     contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(tools, key = { it.id }) { tool ->
+                    items(units, key = { it.orderKey }) { unit ->
+                        // 组开关状态:组内工具全部启用才算"开";切换时整组一起增删。
+                        val allEnabled = unit.toolIds.all { it in selectedToolIds }
                         MultiSelectPickerCard(
-                            title = tool.displayName,
-                            subtitle = toolPickerSubtitle(tool.name, tool.description),
-                            enabled = tool.id in selectedToolIds,
+                            title = unit.pickerTitle,
+                            subtitle = unit.pickerSubtitle,
+                            enabled = allEnabled,
                             onToggle = { enabled ->
-                                selectedToolIds = if (enabled) selectedToolIds + tool.id
-                                else selectedToolIds - tool.id
+                                selectedToolIds = if (enabled) selectedToolIds + unit.toolIds
+                                else selectedToolIds - unit.toolIds
                             },
                         )
                     }
@@ -99,6 +105,18 @@ fun ToolPickerSheet(
         }
     }
 }
+
+private val ToolUnit.pickerTitle: String
+    get() = when (this) {
+        is ToolUnit.SingleTool -> tool.displayName
+        is ToolUnit.Group -> group.displayName
+    }
+
+private val ToolUnit.pickerSubtitle: String
+    get() = when (this) {
+        is ToolUnit.SingleTool -> toolPickerSubtitle(tool.name, tool.description)
+        is ToolUnit.Group -> group.description
+    }
 
 private fun toolPickerSubtitle(name: String, description: String): String =
     if (name == "get_current_time") "获取设备当前本地时间" else description.ifBlank { name }

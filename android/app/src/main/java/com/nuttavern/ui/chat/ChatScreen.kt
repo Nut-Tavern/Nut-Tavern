@@ -88,6 +88,7 @@ fun ChatScreen(
     val currentToolActivity by viewModel.currentToolActivity.collectAsState()
     val pendingToolApproval by viewModel.pendingToolApproval.collectAsState()
     val currentEnabledToolIds by viewModel.currentEnabledToolIds.collectAsState()
+    val localToolsSettings by viewModel.localToolsSettings.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
     val clipboard = LocalClipboard.current
@@ -338,6 +339,7 @@ fun ChatScreen(
         visible = showToolPicker,
         tools = viewModel.chatTools,
         enabledToolIds = currentEnabledToolIds,
+        toolOrder = localToolsSettings.toolOrder,
         onApply = { selectedToolIds ->
             viewModel.updateToolSelection(selectedToolIds)
             showToolPicker = false

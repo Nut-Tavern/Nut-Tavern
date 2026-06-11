@@ -16,7 +16,7 @@ import kotlinx.coroutines.launch
 /**
  * 内置工具设置 ViewModel。
  *
- * 管理 [LocalToolsSettings](新会话默认总开关 / 各工具默认启用 / 各工具确认),并暴露注册表里的工具定义
+ * 管理 [LocalToolsSettings](各工具默认启用 / 各工具调用前确认),并暴露注册表里的工具定义
  * 供设置页枚举。与 [ToolsViewModel](工具调用引擎高级设置)分开,单文件单职责。
  */
 @HiltViewModel
@@ -34,35 +34,38 @@ class LocalToolsViewModel @Inject constructor(
     /** 注册表里的全部内置工具定义(展示用,不代表启用状态)。 */
     val tools: List<ChatTool> = toolRegistry.tools
 
-    fun setDefaultEnabled(enabled: Boolean) {
-        viewModelScope.launch {
-            repository.update { it.copy(defaultEnabled = enabled) }
-        }
-    }
-
-    fun setToolEnabled(toolId: String, enabled: Boolean) {
+    /** 批量启用 / 禁用一组工具(单工具传单元素集合,工具组把组内全部 id 一起增删)。 */
+    fun setToolsEnabled(toolIds: Set<String>, enabled: Boolean) {
         viewModelScope.launch {
             repository.update { current ->
                 val next = if (enabled) {
-                    current.enabledToolIds + toolId
+                    current.enabledToolIds + toolIds
                 } else {
-                    current.enabledToolIds - toolId
+                    current.enabledToolIds - toolIds
                 }
                 current.copy(enabledToolIds = next)
             }
         }
     }
 
-    fun setToolApprovalRequired(toolId: String, required: Boolean) {
+    /** 批量设置一组工具是否调用前确认。 */
+    fun setToolsApprovalRequired(toolIds: Set<String>, required: Boolean) {
         viewModelScope.launch {
             repository.update { current ->
                 val next = if (required) {
-                    current.approvalRequiredToolIds + toolId
+                    current.approvalRequiredToolIds + toolIds
                 } else {
-                    current.approvalRequiredToolIds - toolId
+                    current.approvalRequiredToolIds - toolIds
                 }
                 current.copy(approvalRequiredToolIds = next)
             }
+        }
+    }
+
+    /** 回写工具展示单元顺序(设置页拖动排序后调用)。orderKey 见 [com.nuttavern.network.ToolUnit]。 */
+    fun setToolOrder(orderKeys: List<String>) {
+        viewModelScope.launch {
+            repository.update { it.copy(toolOrder = orderKeys) }
         }
     }
 }

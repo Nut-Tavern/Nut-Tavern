@@ -88,6 +88,7 @@ class ChatViewModel @Inject constructor(
     private val regexScriptRepository: RegexScriptRepository,
     private val lorebookRepository: com.nuttavern.data.lorebook.LorebookRepository,
     private val lorebookEngine: com.nuttavern.lorebook.LorebookEngine,
+    private val sessionLorebookResolver: com.nuttavern.data.lorebook.SessionLorebookResolver,
     private val settingsDataStore: SettingsDataStore,
     private val promptComposer: PromptComposer,
     private val regexEngine: RegexEngine,
@@ -321,14 +322,27 @@ class ChatViewModel @Inject constructor(
         initialValue = 0 to 0,
     )
 
-    /** 内置工具总数 / 当前会话启用数,供 SettingsDrawer 副标显示。 */
+    /**
+     * 内置工具总数 / 当前会话启用数,供 SettingsDrawer 副标显示。
+     *
+     * 按"展示单元"计数而非工具个数:同一分组的工具(如世界书的 list/read)在 UI 里合并成一张卡、
+     * 算作一个工具单元;无分组工具各算一个。启用数同理——组内工具全部启用才算该组"已启用"。
+     */
     val toolCounts: StateFlow<Pair<Int, Int>> = _currentEnabledToolIds.map { enabledIds ->
-        chatTools.size to chatTools.count { it.id in enabledIds }
+        countToolUnits(enabledIds)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5_000),
-        initialValue = chatTools.size to 0,
+        initialValue = countToolUnits(emptySet()),
     )
+
+    /** 把工具按分组聚合成展示单元,返回 (单元总数, 已启用单元数)。 */
+    private fun countToolUnits(enabledIds: Set<String>): Pair<Int, Int> {
+        // 分组桶:同组工具归一桶(key=group:id),无组工具各自一桶(key=tool:id)。
+        val units = chatTools.groupBy { it.group?.id?.let { gid -> "group:$gid" } ?: "tool:${it.id}" }
+        val enabledUnits = units.count { (_, tools) -> tools.all { it.id in enabledIds } }
+        return units.size to enabledUnits
+    }
 
 
     private var streamingJob: Job? = null
@@ -669,6 +683,7 @@ class ChatViewModel @Inject constructor(
                 val toolsSettings = toolsSettingsRepository.settings.first()
                 val localToolsConfig = localToolsRepository.settings.first()
                 val activeTools = resolveActiveTools(localToolsConfig)
+                val toolContext = buildToolContext(conversationId)
 
                 chatApiClient.streamChat(
                     provider = provider,
@@ -681,6 +696,7 @@ class ChatViewModel @Inject constructor(
                     toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
                     requireToolApproval = false,
                     approveToolCall = buildToolApprover(),
+                    toolContext = toolContext,
                 ).collect { chunk ->
                     when {
                         chunk.error != null -> {
@@ -1072,6 +1088,22 @@ class ChatViewModel @Inject constructor(
 
     private val _clipboardMessage = MutableStateFlow<String?>(null)
     val clipboardMessage: StateFlow<String?> = _clipboardMessage.asStateFlow()
+
+    /**
+     * 构造本次发送的工具会话上下文。把"当前会话已启用世界书集合"快照进 [com.nuttavern.network.ToolContext],
+     * 供世界书编辑工具做作用范围校验。来源口径与运行时激活一致(见 SessionLorebookResolver)。
+     *
+     * 无会话(占位态发送)时 conversationId 为 null,世界书集合按当前 character / persona 仍可解析。
+     */
+    private suspend fun buildToolContext(conversationId: String?): com.nuttavern.network.ToolContext {
+        val sessionLorebooks = sessionLorebookResolver
+            .resolve(_currentCharacter.value, _currentPersona.value)
+            .map { it.book }
+        return object : com.nuttavern.network.ToolContext {
+            override val conversationId: String? = conversationId
+            override val sessionLorebooks = sessionLorebooks
+        }
+    }
 
     fun requestCopyMessage(message: Message) {
         _clipboardMessage.value = message.text
@@ -1714,6 +1746,7 @@ class ChatViewModel @Inject constructor(
         val toolsSettings = toolsSettingsRepository.settings.first()
         val localToolsConfig = localToolsRepository.settings.first()
         val activeTools = resolveActiveTools(localToolsConfig)
+        val toolContext = buildToolContext(conversationId)
 
         chatApiClient.streamChat(
             provider = provider,
@@ -1726,6 +1759,7 @@ class ChatViewModel @Inject constructor(
             toolCallRecurseLimit = toolsSettings.toolCallRecurseLimit,
             requireToolApproval = false,
             approveToolCall = buildToolApprover(),
+            toolContext = toolContext,
         ).collect { chunk ->
             when {
                 chunk.error != null -> {
@@ -1845,63 +1879,14 @@ class ChatViewModel @Inject constructor(
         preset: com.nuttavern.data.preset.Preset,
         persona: com.nuttavern.data.persona.UserPersona?,
     ): com.nuttavern.lorebook.LorebookEngine.ActivationResult? {
-        val globalSelectedIds = lorebookRepository.globalSelectedIds.first()
-        val allBooks = lorebookRepository.lorebooks.first()
-        val selectedBooks = allBooks.filter { it.id in globalSelectedIds }
-
-        val taggedLorebooks = buildList {
-            // Persona lorebook(优先级最高,对齐酒馆 persona lore > global + character)
-            // 去重:如果 persona lorebook 已作为全局 WI 或角色来源 WI 激活,跳过
-            val personaLorebookId = persona?.lorebookId
-            // 角色来源世界书 id:角色世界书(primary,单本) + 辅助世界书(additional,多本)
-            val characterBoundIds = buildSet {
-                character?.characterLorebookId?.let { add(it) }
-                addAll(character?.lorebookIds.orEmpty())
-            }
-            if (personaLorebookId != null
-                && personaLorebookId !in globalSelectedIds
-                && personaLorebookId !in characterBoundIds
-            ) {
-                allBooks.find { it.id == personaLorebookId }?.let { personaBook ->
-                    add(
-                        com.nuttavern.lorebook.TaggedLorebook(
-                            book = personaBook,
-                            isCharacterSource = false,
-                            sourceKey = "persona:${personaLorebookId}",
-                        )
-                    )
-                }
-            }
-            // 角色来源世界书(角色世界书 + 辅助世界书,isCharacterSource = true)
-            for (book in allBooks) {
-                if (book.id in characterBoundIds) {
-                    add(
-                        com.nuttavern.lorebook.TaggedLorebook(
-                            book = book,
-                            isCharacterSource = true,
-                            sourceKey = book.id,
-                        )
-                    )
-                }
-            }
-            // 全局选中的世界书(排除已作为角色绑定或 persona 绑定加入的)
-            for (book in selectedBooks) {
-                if (book.id !in characterBoundIds && book.id != personaLorebookId) {
-                    add(
-                        com.nuttavern.lorebook.TaggedLorebook(
-                            book = book,
-                            isCharacterSource = false,
-                            sourceKey = book.id,
-                        )
-                    )
-                }
-            }
-        }
+        // 三来源合并去重与世界书编辑工具共用同一口径,见 SessionLorebookResolver。
+        val taggedLorebooks = sessionLorebookResolver.resolve(character, persona)
         if (taggedLorebooks.isEmpty()) {
             return com.nuttavern.lorebook.LorebookEngine.ActivationResult(
                 nextTimedEffects = com.nuttavern.lorebook.LorebookTimedEffectState.Empty,
             )
         }
+
 
         val messages = history.map { it.content }.reversed()
         val userName = persona?.name?.takeIf { it.isNotBlank() } ?: "User"

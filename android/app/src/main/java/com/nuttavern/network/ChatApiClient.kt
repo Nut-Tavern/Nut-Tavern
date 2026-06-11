@@ -67,6 +67,7 @@ class ChatApiClient @Inject constructor() {
         toolCallRecurseLimit: Int = 0,
         requireToolApproval: Boolean = false,
         approveToolCall: ToolCallApprover? = null,
+        toolContext: ToolContext = ToolContext.Empty,
     ): Flow<ChatStreamChunk> {
         val effective = effectiveProvider(provider, model)
         // thinkingLevel 是会话级思考量(ChatViewModel.currentThinkingLevel)。预设级覆盖
@@ -79,22 +80,22 @@ class ChatApiClient @Inject constructor() {
                 if (effective.useResponsesApi) {
                     streamOpenAIResponses(
                         effective, model, messages, systemPrompt, effectiveThinking, generationParams,
-                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall, toolContext,
                     )
                 } else {
                     streamOpenAI(
                         effective, model, messages, systemPrompt, effectiveThinking, generationParams,
-                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+                        activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall, toolContext,
                     )
                 }
             }
             is Provider.Google -> streamGoogle(
                 effective, model, messages, systemPrompt, effectiveThinking, generationParams,
-                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall, toolContext,
             )
             is Provider.Claude -> streamClaude(
                 effective, model, messages, systemPrompt, effectiveThinking, generationParams,
-                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall,
+                activeTools, toolCallRecurseLimit, requireToolApproval, approveToolCall, toolContext,
             )
         }
     }
@@ -206,6 +207,7 @@ class ChatApiClient @Inject constructor() {
         toolCallRecurseLimit: Int,
         requireToolApproval: Boolean,
         approveToolCall: ToolCallApprover?,
+        toolContext: ToolContext,
     ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
@@ -252,7 +254,7 @@ class ChatApiClient @Inject constructor() {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
                         val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
-                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall, toolContext)
                         } else {
                             ToolExecutionResult(toolCallLimitExceededResult())
                         }
@@ -434,6 +436,7 @@ class ChatApiClient @Inject constructor() {
         call: LocalToolCall,
         requireApproval: Boolean,
         approveToolCall: ToolCallApprover?,
+        toolContext: ToolContext,
     ): ToolExecutionResult {
         val tool = toolsByName[call.name]
             ?: return ToolExecutionResult(JSONObject().put("error", "unknown tool: ${call.name}").toString())
@@ -467,7 +470,7 @@ class ChatApiClient @Inject constructor() {
             }
         }
         return try {
-            ToolExecutionResult(tool.execute(arguments))
+            ToolExecutionResult(tool.execute(arguments, toolContext))
         } catch (e: Exception) {
             // 详细异常只进本地日志,回灌给模型的是稳定低敏文案,避免泄露本地路径 / 实现细节。
             android.util.Log.w("ChatApiClient", "tool execution failed: ${tool.name}", e)
@@ -509,6 +512,7 @@ class ChatApiClient @Inject constructor() {
         toolCallRecurseLimit: Int,
         requireToolApproval: Boolean,
         approveToolCall: ToolCallApprover?,
+        toolContext: ToolContext,
     ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
@@ -553,7 +557,7 @@ class ChatApiClient @Inject constructor() {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
                         val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
-                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall, toolContext)
                         } else {
                             ToolExecutionResult(toolCallLimitExceededResult())
                         }
@@ -694,6 +698,7 @@ class ChatApiClient @Inject constructor() {
         toolCallRecurseLimit: Int,
         requireToolApproval: Boolean,
         approveToolCall: ToolCallApprover?,
+        toolContext: ToolContext,
     ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildVersionedEndpointUrl(
             baseUrl = provider.baseUrl,
@@ -747,7 +752,7 @@ class ChatApiClient @Inject constructor() {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
                         val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
-                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall, toolContext)
                         } else {
                             ToolExecutionResult(toolCallLimitExceededResult())
                         }
@@ -829,6 +834,7 @@ class ChatApiClient @Inject constructor() {
         toolCallRecurseLimit: Int,
         requireToolApproval: Boolean,
         approveToolCall: ToolCallApprover?,
+        toolContext: ToolContext,
     ): Flow<ChatStreamChunk> = channelFlow {
         val url = buildGeminiStreamUrl(provider.baseUrl, model.modelId)
         val toolsByName = tools.associateBy { it.name }
@@ -880,7 +886,7 @@ class ChatApiClient @Inject constructor() {
                         send(ChatStreamChunk(content = "", toolActivity = call.name))
                         val executionResult = if (remainingToolCalls > 0) {
                             remainingToolCalls -= 1
-                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall)
+                            executeToolCall(toolsByName, call, requireToolApproval, approveToolCall, toolContext)
                         } else {
                             ToolExecutionResult(toolCallLimitExceededResult())
                         }

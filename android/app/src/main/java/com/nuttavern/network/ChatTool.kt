@@ -1,6 +1,29 @@
 package com.nuttavern.network
 
+import com.nuttavern.data.lorebook.Lorebook
 import org.json.JSONObject
+
+/**
+ * 工具执行时的会话上下文。把"工具运行需要、但不该由模型给"的运行时信息透传给 [ChatTool.execute]。
+ *
+ * 无依赖工具(如 get_current_time)忽略它即可;需要会话信息的工具(如世界书编辑)按需读取。
+ *
+ * @property conversationId 当前会话 id;无会话(占位态发送)时为 null。
+ * @property sessionLorebooks 当前会话**已启用**的世界书集合(global + 角色 + persona 三来源合并去重)。
+ *   世界书工具的作用范围硬边界:只能在这个集合内操作条目,集合外一律拒绝。空集表示当前会话没启用任何世界书。
+ */
+interface ToolContext {
+    val conversationId: String?
+    val sessionLorebooks: List<Lorebook>
+
+    companion object {
+        /** 不携带任何会话信息的空上下文。用于无工具 / 无会话场景。 */
+        val Empty: ToolContext = object : ToolContext {
+            override val conversationId: String? = null
+            override val sessionLorebooks: List<Lorebook> = emptyList()
+        }
+    }
+}
 
 /**
  * 客户端内置工具(本地 function calling)。
@@ -19,7 +42,11 @@ import org.json.JSONObject
  * @property parametersSchema JSON Schema(object 类型)。无参数工具传 `{"type":"object","properties":{}}`。
  * @property needsApproval 该工具本次调用是否需要人工确认。注册表里的值只是默认建议;发送链路会按
  *   用户在内置工具页的"调用前确认"设置复制出本次实际值。
- * @property execute 执行体。入参是模型给出的实参(解析后的 JSON,无参数时为空对象),返回纯文本结果。
+ * @property group 工具分组。同一 [ToolGroup] 下的工具在内置工具选择 UI 里合并成一张卡、用一个总开关
+ *   一起启用 / 禁用(底层会话启用集仍按工具 id 存,组开关只是把组内 id 一起增删)。null = 不分组,
+ *   单独成卡(如 get_current_time)。
+ * @property execute 执行体。入参是模型给出的实参(解析后的 JSON,无参数时为空对象)与会话上下文
+ *   [ToolContext],返回纯文本结果。无依赖工具可忽略 context 参数。
  */
 data class ChatTool(
     val id: String,
@@ -28,7 +55,21 @@ data class ChatTool(
     val description: String,
     val parametersSchema: JSONObject,
     val needsApproval: Boolean = false,
-    val execute: suspend (arguments: JSONObject) -> String,
+    val group: ToolGroup? = null,
+    val execute: suspend (arguments: JSONObject, context: ToolContext) -> String,
+)
+
+/**
+ * 工具分组。用于内置工具选择 UI 把同类工具合并成一张卡、一个总开关管理。
+ *
+ * @property id 分组稳定标识。
+ * @property displayName 分组展示名。
+ * @property description 分组说明(展示在卡片副标题)。
+ */
+data class ToolGroup(
+    val id: String,
+    val displayName: String,
+    val description: String,
 )
 
 /**

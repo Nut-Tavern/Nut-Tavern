@@ -15,6 +15,8 @@ import kotlinx.serialization.Serializable
  *   "新会话默认不启用任何具体工具";
  * - [approvalRequiredToolIds]:调用前需要人工确认的工具 id 集合;
  * - [requireApproval]:旧版全局确认字段,仅为反序列化兼容保留,新逻辑不再消费。
+ * - [toolOrder]:工具展示单元(单工具 `tool:{id}` / 工具组 `group:{id}`)的排序 key 列表。空 = 用注册
+ *   顺序。设置页拖动排序后回写,内置工具页与右侧栏快选列表共用这一份顺序。
  *
  * 默认值:[enabledToolIds] 预置 [DEFAULT_ENABLED_TOOL_IDS](当前是无副作用的 get_current_time),
  * 让全新装机在"全局默认启用"下真实可用,而不是显示启用却下发空工具集。这里的 id 字面量必须与
@@ -27,6 +29,7 @@ data class LocalToolsSettings(
     @SerialName("require_approval") val requireApproval: Boolean = false,
     @SerialName("enabled_tool_ids") val enabledToolIds: Set<String> = DEFAULT_ENABLED_TOOL_IDS,
     @SerialName("approval_required_tool_ids") val approvalRequiredToolIds: Set<String> = emptySet(),
+    @SerialName("tool_order") val toolOrder: List<String> = emptyList(),
 ) {
     fun isToolEnabledByDefault(toolId: String): Boolean = toolId in enabledToolIds
 

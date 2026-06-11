@@ -18,7 +18,7 @@ class ChatApiClientToolRequestTest {
         displayName = "获取当前时间",
         description = "获取设备当前的本地日期和时间",
         parametersSchema = JSONObject().put("type", "object").put("properties", JSONObject()),
-        execute = { JSONObject().put("ok", true).toString() },
+        execute = { _, _ -> JSONObject().put("ok", true).toString() },
     )
 
     @Test
