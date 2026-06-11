@@ -421,10 +421,14 @@ class ChatViewModel @Inject constructor(
                     }) {
                     return@collect
                 }
-                // 当前会话不存在(被删 / 归档 / assistant 切换)→ 主动挑同 assistant 下最新一条;
+                // 当前会话不存在(被删 / 归档)→ 收口到当前角色作用域挑最新一条,不跨角色跳转;
                 // 都没有就保持空 id,让用户在 picker 里预选的"下一条新会话"角色 / 身份 / 预设继续生效,
-                // 与 [startNewConversation] 的契约一致。
-                val nextConversation = latestConversationForAssistant(_currentAssistantId.value)
+                // 与 [startNewConversation] / [selectNextAvailableConversation] 的契约一致。
+                // assistant 切换 / 启动恢复需要的 assistant 全局挑选由 [selectLatestConversationForAssistant] 单独负责。
+                val nextConversation = latestConversationForCharacter(
+                    assistantId = _currentAssistantId.value,
+                    characterId = _currentCharacterId.value,
+                )
                 _currentConversationId.value = nextConversation?.id.orEmpty()
                 if (nextConversation != null) {
                     cancelNewConversationInitializers()
@@ -1303,6 +1307,11 @@ class ChatViewModel @Inject constructor(
                 currentMessagesByConversationId - id
             }
         }
+
+        // 立即从内存候选里剔除被删会话:删库是异步的,否则同步回落仍会从陈旧列表里选回被删会话,
+        // 抽屉也会短暂闪现被删项。仓库刷新到位后会用真实列表幂等覆盖。
+        _nonArchivedConversations.value = _nonArchivedConversations.value.filterNot { it.id == id }
+        refreshVisibleConversationsForCurrentScope()
 
         if (_currentConversationId.value == id) {
             selectNextAvailableConversation()
