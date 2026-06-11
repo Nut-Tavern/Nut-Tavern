@@ -101,6 +101,7 @@ class ChatViewModel @Inject constructor(
     private val localToolsRepository: com.nuttavern.data.tools.LocalToolsRepository,
 ) : ViewModel() {
 
+    /** 当前 assistant + 当前角色作用域内的会话列表,主要供左侧会话抽屉展示。 */
     private val _conversationList = MutableStateFlow<List<ConversationSummary>>(emptyList())
     val conversationList: StateFlow<List<ConversationSummary>> = _conversationList.asStateFlow()
 
@@ -403,7 +404,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             assistantRepository.defaultAssistantId.collect { assistantId ->
                 _currentAssistantId.value = assistantId
-                refreshVisibleConversationsForAssistant(assistantId)
+                refreshVisibleConversationsForCurrentScope()
                 if (hasRestoredFromPersistence) {
                     selectLatestConversationForAssistant(assistantId)
                 }
@@ -412,7 +413,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             conversationRepository.nonArchivedConversations.collect { conversations ->
                 _nonArchivedConversations.value = conversations
-                refreshVisibleConversationsForAssistant(_currentAssistantId.value)
+                refreshVisibleConversationsForCurrentScope()
                 if (!hasRestoredFromPersistence) return@collect
                 val currentId = _currentConversationId.value
                 if (currentId.isNotBlank() && conversations.any {
@@ -434,6 +435,7 @@ class ChatViewModel @Inject constructor(
                     _currentToolMode.value = nextConversation.toolMode
                     _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
                     _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
+                    refreshVisibleConversationsForCurrentScope()
                 } else {
                     _currentMessages.value = emptyList()
                 }
@@ -548,6 +550,7 @@ class ChatViewModel @Inject constructor(
             _currentToolMode.value = savedConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(savedConversation)
             _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(savedConversation)
+            refreshVisibleConversationsForCurrentScope()
             return
         }
 
@@ -566,6 +569,7 @@ class ChatViewModel @Inject constructor(
             _currentEnabledToolIds.value = defaultToolIdsForPlaceholder(restoredToolMode)
             _currentEnabledLorebookIds.value = emptySet()
             _currentMessages.value = emptyList()
+            refreshVisibleConversationsForCurrentScope()
             // 上次在"身份还没异步解析完"的瞬间被持久化:persona 存的是 null(未初始化)。
             // 显式"无身份"持久化成 "none" 字符串,不会落到这里,所以只针对 null 重新解析,
             // 避免重启后工作台短暂显示"无身份"。无角色占位态同样回退默认身份。
@@ -587,6 +591,7 @@ class ChatViewModel @Inject constructor(
             _currentToolMode.value = nextConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
             _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
+            refreshVisibleConversationsForCurrentScope()
         } else {
             _currentMessages.value = emptyList()
         }
@@ -791,7 +796,8 @@ class ChatViewModel @Inject constructor(
     }
 
     fun selectConversation(id: String) {
-        val conversation = _conversationList.value.firstOrNull { it.id == id && !it.archived }
+        val conversation = findNonArchivedConversationById(id)
+            ?.takeIf { it.assistantId == _currentAssistantId.value }
         if (conversation == null) return
 
         cancelNewConversationInitializers()
@@ -803,6 +809,7 @@ class ChatViewModel @Inject constructor(
         _currentToolMode.value = conversation.toolMode
         _currentEnabledToolIds.value = enabledToolIdsForConversation(conversation)
         _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(conversation)
+        refreshVisibleConversationsForCurrentScope()
         _draft.value = ""
     }
 
@@ -845,6 +852,7 @@ class ChatViewModel @Inject constructor(
      */
     fun selectCharacterForNewConversation(characterId: String?) {
         _currentCharacterId.value = characterId
+        refreshVisibleConversationsForCurrentScope()
         if (_currentConversationId.value.isBlank()) {
             restartNewConversationPersonaResolution(characterId)
         }
@@ -865,6 +873,7 @@ class ChatViewModel @Inject constructor(
         } else {
             _currentCharacterId.value = characterId
             startNewConversationPlaceholder(characterId)
+            refreshVisibleConversationsForCurrentScope()
         }
     }
 
@@ -905,7 +914,7 @@ class ChatViewModel @Inject constructor(
 
         if (conversationId.isBlank()) return
 
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val conversation = findNonArchivedConversationById(conversationId) ?: return
         if (conversation.personaId == normalizedId) return
 
         viewModelScope.launch {
@@ -930,7 +939,7 @@ class ChatViewModel @Inject constructor(
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val conversation = findNonArchivedConversationById(conversationId) ?: return
         if (conversation.presetId == presetId) return
 
         viewModelScope.launch {
@@ -957,7 +966,7 @@ class ChatViewModel @Inject constructor(
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val conversation = findNonArchivedConversationById(conversationId) ?: return
         val nextJson = encodeStringListToJson(validIds.toList())
         if (conversation.enabledLorebookIdsJson == nextJson) return
 
@@ -974,7 +983,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             assistantRepository.setDefaultAssistant(id)
             _currentAssistantId.value = id
-            refreshVisibleConversationsForAssistant(id)
+            refreshVisibleConversationsForCurrentScope()
             selectLatestConversationForAssistant(id)
         }
     }
@@ -1025,7 +1034,7 @@ class ChatViewModel @Inject constructor(
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val conversation = findNonArchivedConversationById(conversationId) ?: return
         if (conversation.thinkingLevel == level) return
 
         viewModelScope.launch {
@@ -1066,7 +1075,7 @@ class ChatViewModel @Inject constructor(
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId } ?: return
+        val conversation = findNonArchivedConversationById(conversationId) ?: return
         val nextJson = encodeStringListToJson(nextEnabledToolIds.toList())
         if (conversation.enabledToolIdsJson == nextJson) return
 
@@ -1155,10 +1164,7 @@ class ChatViewModel @Inject constructor(
      * 无会话(占位态发送)时 conversationId 为 null,世界书集合按当前 character / persona 仍可解析。
      */
     private suspend fun buildToolContext(conversationId: String?): com.nuttavern.network.ToolContext {
-        val conversation = conversationId?.let { id ->
-            _conversationList.value.firstOrNull { it.id == id }
-                ?: _allConversations.value.firstOrNull { it.id == id }
-        }
+        val conversation = conversationId?.let(::findConversationById)
         val selectedLorebookIds = conversation?.let(::enabledLorebookIdsForConversation)
             ?: _currentEnabledLorebookIds.value
         val character = conversation?.characterId
@@ -1334,7 +1340,7 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun ensureCurrentConversation(firstMessage: String, createdAt: Long): String {
         val currentConversationId = _currentConversationId.value
-        val currentConversation = _conversationList.value.firstOrNull {
+        val currentConversation = findNonArchivedConversationById(currentConversationId)?.takeIf {
             it.id == currentConversationId && it.assistantId == _currentAssistantId.value && !it.archived
         }
         if (currentConversation != null) return currentConversation.id
@@ -1416,7 +1422,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private suspend fun refreshConversationTime(conversationId: String, updatedAt: Long) {
-        val updatedConversation = _conversationList.value.firstOrNull { it.id == conversationId }
+        val updatedConversation = findNonArchivedConversationById(conversationId)
             ?.copy(lastMessageTime = "刚刚", groupLabel = "今天")
             ?: return
 
@@ -1429,10 +1435,14 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun selectNextAvailableConversation() {
-        val nextConversation = latestConversationForAssistant(_currentAssistantId.value)
+        val nextConversation = latestConversationForCharacter(
+            assistantId = _currentAssistantId.value,
+            characterId = _currentCharacterId.value,
+        )
         if (nextConversation == null) {
             _currentConversationId.value = ""
             _currentMessages.value = emptyList()
+            refreshVisibleConversationsForCurrentScope()
             _draft.value = ""
             _isReplying.value = false
             return
@@ -1449,18 +1459,34 @@ class ChatViewModel @Inject constructor(
         _currentToolMode.value = nextConversation.toolMode
         _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
         _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
+        refreshVisibleConversationsForCurrentScope()
         _draft.value = ""
         _isReplying.value = false
     }
 
     private fun isActiveConversation(conversationId: String): Boolean {
-        return _conversationList.value.any { it.id == conversationId && !it.archived }
+        return findNonArchivedConversationById(conversationId) != null
     }
 
-    private fun refreshVisibleConversationsForAssistant(assistantId: String) {
+    private fun findNonArchivedConversationById(conversationId: String): ConversationSummary? {
+        return _conversationList.value.firstOrNull { conversation ->
+            conversation.id == conversationId && !conversation.archived
+        } ?: _nonArchivedConversations.value.firstOrNull { conversation ->
+            conversation.id == conversationId && !conversation.archived
+        }
+    }
+
+    private fun findConversationById(conversationId: String): ConversationSummary? {
+        return findNonArchivedConversationById(conversationId)
+            ?: _allConversations.value.firstOrNull { conversation -> conversation.id == conversationId }
+    }
+
+    private fun refreshVisibleConversationsForCurrentScope() {
         _conversationList.value = sortConversations(
             _nonArchivedConversations.value.filter { conversation ->
-                conversation.assistantId == assistantId && !conversation.archived
+                conversation.assistantId == _currentAssistantId.value &&
+                    conversation.characterId == _currentCharacterId.value &&
+                    !conversation.archived
             },
         )
     }
@@ -1486,6 +1512,7 @@ class ChatViewModel @Inject constructor(
             _currentToolMode.value = nextConversation.toolMode
             _currentEnabledToolIds.value = enabledToolIdsForConversation(nextConversation)
             _currentEnabledLorebookIds.value = enabledLorebookIdsForConversation(nextConversation)
+            refreshVisibleConversationsForCurrentScope()
         }
         _currentMessages.value = emptyList()
         _draft.value = ""
@@ -1588,8 +1615,7 @@ class ChatViewModel @Inject constructor(
      */
     private suspend fun applyAiOutputRegex(conversationId: String, raw: String): String {
         if (raw.isEmpty()) return raw
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId }
-            ?: _allConversations.value.firstOrNull { it.id == conversationId }
+        val conversation = findConversationById(conversationId)
             ?: return raw
         val character = conversation.characterId
             ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
@@ -1620,8 +1646,7 @@ class ChatViewModel @Inject constructor(
      */
     private suspend fun applyUserInputRegexForChatFile(conversationId: String, raw: String): String {
         if (raw.isEmpty()) return raw
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId }
-            ?: _allConversations.value.firstOrNull { it.id == conversationId }
+        val conversation = findConversationById(conversationId)
             ?: return raw
         val character = conversation.characterId
             ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
@@ -1939,8 +1964,7 @@ class ChatViewModel @Inject constructor(
         conversationId: String,
         userMessage: String?,
     ): PromptComposerInput {
-        val conversation = _conversationList.value.firstOrNull { it.id == conversationId }
-            ?: _allConversations.value.firstOrNull { it.id == conversationId }
+        val conversation = findConversationById(conversationId)
 
         val character = conversation?.characterId
             ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
@@ -2295,7 +2319,7 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun getSystemPrompt(provider: Provider, model: Model): String {
-        val currentConversation = _conversationList.value.firstOrNull { it.id == _currentConversationId.value }
+        val currentConversation = findNonArchivedConversationById(_currentConversationId.value)
         val assistantId = currentConversation?.assistantId ?: getCurrentAssistantId()
         val assistant = assistantRepository.assistantsState.firstOrNull { it.id == assistantId }
             ?: assistantRepository.assistantsState.firstOrNull { it.id == assistantRepository.defaultAssistantIdState }
