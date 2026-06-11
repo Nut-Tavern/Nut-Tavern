@@ -253,6 +253,7 @@ fun ChatScreen(
                             editContent = message.text
                         },
                         onRegenerateMessage = { message -> regenerateMessage.value = message },
+                        onSelectSwipe = viewModel::selectSwipe,
                         onDeleteMessage = { message -> pendingDeleteMessage.value = message },
                         onOpenModelPicker = { showModelPicker = true },
                         onDraftChange = viewModel::updateDraft,
@@ -468,6 +469,7 @@ private fun ChatScreenContent(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     onOpenModelPicker: () -> Unit,
     onDraftChange: (String) -> Unit,
@@ -550,6 +552,7 @@ private fun ChatScreenContent(
             onCopyMessage = onCopyMessage,
             onEditMessage = onEditMessage,
             onRegenerateMessage = onRegenerateMessage,
+            onSelectSwipe = onSelectSwipe,
             onDeleteMessage = onDeleteMessage,
         )
     }

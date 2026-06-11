@@ -53,6 +53,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
 import com.composables.icons.lucide.Copy
+import com.composables.icons.lucide.ChevronLeft
+import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
 import com.composables.icons.lucide.RefreshCcw
@@ -71,10 +73,12 @@ import com.nuttavern.ui.components.NutTavernIconRow
 internal fun ChatMessageRow(
     message: Message,
     maxMessageWidth: Dp,
+    isLastAssistantMessage: Boolean,
     toolDisplayName: (String) -> String,
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
 ) {
     val isUserMessage = message.role == "user"
@@ -122,6 +126,11 @@ internal fun ChatMessageRow(
     if (actionsSheetVisible) {
         MessageActionsSheet(
             isUserMessage = isUserMessage,
+            // swipe 切换组:仅最后一条 assistant 消息且存在多个候选时展示。
+            showSwipeSwitcher = isLastAssistantMessage && !isUserMessage && message.hasMultipleSwipes,
+            swipeIndex = message.swipeIndex,
+            swipeCount = message.swipes.size,
+            onSelectSwipe = { targetIndex -> onSelectSwipe(message.id, targetIndex) },
             onDismiss = { actionsSheetVisible = false },
             onCopy = {
                 actionsSheetVisible = false
@@ -478,6 +487,10 @@ internal fun StreamingMessageRow(
 @Composable
 private fun MessageActionsSheet(
     isUserMessage: Boolean,
+    showSwipeSwitcher: Boolean,
+    swipeIndex: Int,
+    swipeCount: Int,
+    onSelectSwipe: (targetIndex: Int) -> Unit,
     onDismiss: () -> Unit,
     onCopy: () -> Unit,
     onEdit: () -> Unit,
@@ -494,6 +507,15 @@ private fun MessageActionsSheet(
                 .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(NutTavernGroupTokens.SectionSpacing),
         ) {
+            if (showSwipeSwitcher) {
+                NutTavernGroupSection {
+                    SwipeSwitcherRow(
+                        swipeIndex = swipeIndex,
+                        swipeCount = swipeCount,
+                        onSelectSwipe = onSelectSwipe,
+                    )
+                }
+            }
             NutTavernGroupSection {
                 NutTavernIconRow(
                     icon = Lucide.Copy,
@@ -521,6 +543,49 @@ private fun MessageActionsSheet(
                     onClick = onDelete,
                 )
             }
+        }
+    }
+}
+
+/**
+ * swipe 候选切换行:左箭头切上一条、居中显示"候选回复 N / M"、右箭头切下一条。
+ * 到边界时对应箭头禁用。切换不关抽屉,方便连续切换;计数随消息重组实时更新。
+ */
+@Composable
+private fun SwipeSwitcherRow(
+    swipeIndex: Int,
+    swipeCount: Int,
+    onSelectSwipe: (targetIndex: Int) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        IconButton(
+            onClick = { onSelectSwipe(swipeIndex - 1) },
+            enabled = swipeIndex > 0,
+        ) {
+            Icon(
+                imageVector = Lucide.ChevronLeft,
+                contentDescription = "上一条候选",
+            )
+        }
+        Text(
+            text = "候选回复 ${swipeIndex + 1} / $swipeCount",
+            style = MaterialTheme.typography.bodyLarge,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        IconButton(
+            onClick = { onSelectSwipe(swipeIndex + 1) },
+            enabled = swipeIndex < swipeCount - 1,
+        ) {
+            Icon(
+                imageVector = Lucide.ChevronRight,
+                contentDescription = "下一条候选",
+            )
         }
     }
 }

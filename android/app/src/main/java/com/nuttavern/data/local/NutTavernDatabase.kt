@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 21,
+    version = 22,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -344,6 +344,23 @@ abstract class NutTavernDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 if (!db.hasColumn("conversations", "enabledLorebookIdsJson")) {
                     db.execSQL("ALTER TABLE `conversations` ADD COLUMN `enabledLorebookIdsJson` TEXT DEFAULT NULL")
+                }
+            }
+        }
+
+        /**
+         * 消息加 swipe 候选字段:swipesJson(全部候选,JSON 数组的数组)+ swipeIndex(当前选中索引)。
+         *
+         * 老消息默认 swipesJson '[]' = 无 swipe(只有一个版本),swipeIndex 0,与升级前行为一致。
+         * partsJson 仍是"当前显示候选",所有现有渲染 / 历史 / 正则链路不受影响。
+         */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("messages", "swipesJson")) {
+                    db.execSQL("ALTER TABLE `messages` ADD COLUMN `swipesJson` TEXT NOT NULL DEFAULT '[]'")
+                }
+                if (!db.hasColumn("messages", "swipeIndex")) {
+                    db.execSQL("ALTER TABLE `messages` ADD COLUMN `swipeIndex` INTEGER NOT NULL DEFAULT 0")
                 }
             }
         }

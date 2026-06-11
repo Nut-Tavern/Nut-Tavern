@@ -58,6 +58,27 @@ class ConversationRepository @Inject constructor(
         messageDao.updatePartsById(messageId, encodeParts(parts))
     }
 
+    /**
+     * 更新某条消息的 swipe 候选与当前选中索引,同时把 [partsJson] 同步为选中候选的内容
+     * (保证"当前显示候选"与 swipeIndex 一致)。
+     *
+     * @param selectedParts 当前选中候选的 parts,写入 partsJson 供现有渲染 / 历史链路消费。
+     * @param swipes 全部候选;空列表表示退化为无 swipe(swipesJson 写 '[]')。
+     */
+    suspend fun updateMessageSwipes(
+        messageId: String,
+        selectedParts: List<MessagePart>,
+        swipes: List<List<MessagePart>>,
+        swipeIndex: Int,
+    ) {
+        messageDao.updateSwipesById(
+            messageId = messageId,
+            partsJson = encodeParts(selectedParts),
+            swipesJson = encodeSwipes(swipes),
+            swipeIndex = swipeIndex,
+        )
+    }
+
     suspend fun deleteMessage(messageId: String) {
         messageDao.deleteById(messageId)
     }
@@ -243,6 +264,8 @@ class ConversationRepository @Inject constructor(
             role = role,
             parts = decodeParts(partsJson),
             attachments = decodeAttachments(attachmentsJson),
+            swipes = decodeSwipes(swipesJson),
+            swipeIndex = swipeIndex,
         )
     }
 
@@ -254,6 +277,8 @@ class ConversationRepository @Inject constructor(
             partsJson = encodeParts(parts),
             createdAt = createdAt,
             attachmentsJson = encodeAttachments(attachments),
+            swipesJson = encodeSwipes(swipes),
+            swipeIndex = swipeIndex,
         )
     }
 
@@ -272,6 +297,23 @@ class ConversationRepository @Inject constructor(
     private fun encodeParts(parts: List<MessagePart>): String {
         if (parts.isEmpty()) return "[]"
         return partsJsonCodec.encodeToString(ListSerializer(MessagePart.serializer()), parts)
+    }
+
+    private fun decodeSwipes(json: String): List<List<MessagePart>> {
+        if (json.isBlank() || json == "[]") return emptyList()
+        // 损坏 / 不可识别的 swipe JSON 不应让会话加载崩:退化为无候选(只剩 partsJson 那一个版本)。
+        // 与 decodeParts 同口径记 warning 便于排查。
+        return runCatching {
+            swipesJsonCodec.decodeFromString(swipesSerializer, json)
+        }.getOrElse { error ->
+            android.util.Log.w("ConversationRepository", "decodeSwipes failed, dropping swipe candidates", error)
+            emptyList()
+        }
+    }
+
+    private fun encodeSwipes(swipes: List<List<MessagePart>>): String {
+        if (swipes.isEmpty()) return "[]"
+        return swipesJsonCodec.encodeToString(swipesSerializer, swipes)
     }
 
     private fun decodeAttachments(json: String): List<ImageAttachment> {
@@ -336,5 +378,10 @@ class ConversationRepository @Inject constructor(
             encodeDefaults = true
             classDiscriminator = "type"
         }
+
+        // swipe 候选编解码复用 partsJsonCodec 的多态配置:每个候选是一个 List<MessagePart>,
+        // 整体是 List<List<MessagePart>>。单独建 codec 只为复用 serializer,配置必须与 parts 一致。
+        val swipesJsonCodec = partsJsonCodec
+        val swipesSerializer = ListSerializer(ListSerializer(MessagePart.serializer()))
     }
 }

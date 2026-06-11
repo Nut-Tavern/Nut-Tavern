@@ -66,6 +66,13 @@ data class Message(
      * 二进制落 [filesDir],这里只引用路径,发请求时按 [ImageAttachment.path] 读文件转 base64。
      */
     val attachments: List<ImageAttachment> = emptyList(),
+    /**
+     * swipe 候选列表:每个元素是一个完整候选的 parts。空 = 只有一个版本(不展示切换)。
+     * 对齐酒馆 `swipes`;非空时 [swipeIndex] 处候选与 [parts] 内容一致。
+     */
+    val swipes: List<List<MessagePart>> = emptyList(),
+    /** 当前选中的 swipe 候选索引。[swipes] 为空时固定 0。 */
+    val swipeIndex: Int = 0,
 ) {
     /** 拼接成纯正文文本:喂 API history / 标题生成 / 正则匹配用,跳过思考与工具块。 */
     val text: String get() = parts.filterIsInstance<MessagePart.Text>().joinToString("") { it.text }
@@ -73,6 +80,9 @@ data class Message(
     /** 最后一个思考块(如有)。渲染思考块时用。 */
     val reasoning: MessagePart.Reasoning?
         get() = parts.filterIsInstance<MessagePart.Reasoning>().lastOrNull()
+
+    /** 是否有多个 swipe 候选(用于决定是否展示切换 UI)。 */
+    val hasMultipleSwipes: Boolean get() = swipes.size > 1
 }
 
 /**

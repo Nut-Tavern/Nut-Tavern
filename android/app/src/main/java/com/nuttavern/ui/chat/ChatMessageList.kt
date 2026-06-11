@@ -111,6 +111,7 @@ internal fun ChatMessageList(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -141,6 +142,7 @@ internal fun ChatMessageList(
             onCopyMessage = onCopyMessage,
             onEditMessage = onEditMessage,
             onRegenerateMessage = onRegenerateMessage,
+            onSelectSwipe = onSelectSwipe,
             onDeleteMessage = onDeleteMessage,
             modifier = modifier,
         )
@@ -160,6 +162,7 @@ private fun ChatMessageListContent(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     modifier: Modifier,
 ) {
@@ -168,6 +171,12 @@ private fun ChatMessageListContent(
     val density = LocalDensity.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val maxMessageWidth = (screenWidthDp * 0.78).dp
+
+    // swipe 切换只在**对话最末条且为 assistant**时展示(对齐酒馆 isMessageSwipeable:
+    // 仅 chat 最末楼层可 swipe)。末条是 user(已发未回复)时不展示。
+    val swipeableMessageId = messages.lastOrNull()
+        ?.takeIf { it.role == "assistant" }
+        ?.id
 
     val totalItemCount = messages.size + if (shouldShowStreaming) 1 else 0
 
@@ -260,10 +269,12 @@ private fun ChatMessageListContent(
                 ChatMessageRow(
                     message = message,
                     maxMessageWidth = maxMessageWidth,
+                    isLastAssistantMessage = message.id == swipeableMessageId,
                     toolDisplayName = toolDisplayName,
                     onCopyMessage = onCopyMessage,
                     onEditMessage = onEditMessage,
                     onRegenerateMessage = onRegenerateMessage,
+                    onSelectSwipe = onSelectSwipe,
                     onDeleteMessage = onDeleteMessage,
                 )
             }

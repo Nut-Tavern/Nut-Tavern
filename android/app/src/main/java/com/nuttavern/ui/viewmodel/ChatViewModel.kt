@@ -12,6 +12,7 @@ import com.nuttavern.data.model.GeneratedContentSanitizer
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.data.model.MessagePart
+import com.nuttavern.data.model.MessageSwipes
 import com.nuttavern.data.model.Modality
 import com.nuttavern.data.model.Model
 import com.nuttavern.data.model.Provider
@@ -1205,19 +1206,33 @@ class ChatViewModel @Inject constructor(
         // 删除其余 Text part(编辑框是单一文本框,多段正文合并到首个 Text 的位置)。
         // 没有 Text part(纯思考 / 工具消息)则在末尾追加一个 Text。
         val updatedParts = replaceTextParts(existingMessage.parts, normalizedContent)
-        val updatedMessage = existingMessage.copy(parts = updatedParts)
+        // 编辑的是当前候选:有 swipe 时同步写回 swipes[swipeIndex],否则编辑后切走再切回 / 重生并入
+        // 会丢编辑(appendRegeneratedCandidate 在 swipes 非空时只读 swipes,不读 parts)。
+        val hasSwipes = existingMessage.swipes.isNotEmpty()
+        val updatedSwipes = if (hasSwipes) {
+            existingMessage.swipes.mapIndexed { index, candidate ->
+                if (index == existingMessage.swipeIndex) updatedParts else candidate
+            }
+        } else {
+            emptyList()
+        }
+        val updatedMessage = existingMessage.copy(parts = updatedParts, swipes = updatedSwipes)
 
         viewModelScope.launch {
-            conversationRepository.updateMessageParts(
-                messageId = messageId,
-                parts = updatedParts,
-            )
-            _messagesByConversationId.update { messagesByConversationId ->
-                val nextMessages = messagesByConversationId[conversationId].orEmpty()
-                    .map { message -> if (message.id == messageId) updatedMessage else message }
-                messagesByConversationId + (conversationId to nextMessages)
+            if (hasSwipes) {
+                conversationRepository.updateMessageSwipes(
+                    messageId = messageId,
+                    selectedParts = updatedParts,
+                    swipes = updatedSwipes,
+                    swipeIndex = existingMessage.swipeIndex,
+                )
+            } else {
+                conversationRepository.updateMessageParts(
+                    messageId = messageId,
+                    parts = updatedParts,
+                )
             }
-            _currentMessages.value = _messagesByConversationId.value[conversationId].orEmpty()
+            updateMessageInMemory(conversationId, updatedMessage)
         }
     }
 
@@ -1279,13 +1294,28 @@ class ChatViewModel @Inject constructor(
                 return
             }
 
+            // 仅当目标是**对话最末条**且为 assistant 时做 swipe 并入(对齐酒馆 isMessageSwipeable:
+            // messageId == chat.length - 1)。若它后面还挂着未回复的 user 消息,重生会改变后续上下文,
+            // 必须走删后续重生而非 swipe,否则 prompt 会漏掉后续 user 消息、并产生悬空消息。
+            val isLastMessage = messages.lastOrNull()?.id == message.id
+            val swipeTarget = if (isLastMessage) message else null
+
             _isReplying.value = true
 
             streamingJob = viewModelScope.launch {
                 try {
-                    streamAssistantReplyForConversation(conversationId) {
-                        conversationRepository.deleteMessagesFrom(conversationId, message.id)
-                        keepMessagesBefore(conversationId, message.id)
+                    streamAssistantReplyForConversation(
+                        conversationId = conversationId,
+                        regenerateSwipeTarget = swipeTarget,
+                    ) {
+                        if (swipeTarget != null) {
+                            // swipe 并入:只把目标消息从内存历史移除(让 prompt 不带旧回复),**不删库**;
+                            // 落库走 mergeRegeneratedSwipe 更新同一条消息的候选,observeMessages 会把它带回。
+                            keepMessagesBefore(conversationId, message.id)
+                        } else {
+                            conversationRepository.deleteMessagesFrom(conversationId, message.id)
+                            keepMessagesBefore(conversationId, message.id)
+                        }
                     }
                 } catch (e: CancellationException) {
                     clearStreamingState(conversationId)
@@ -1296,6 +1326,30 @@ class ChatViewModel @Inject constructor(
                     _isReplying.value = false
                 }
             }
+        }
+    }
+
+    /**
+     * 切换某条消息显示的 swipe 候选。索引越界 / 与当前一致 / 无多候选时不动作。
+     * 落库 + 内存同步,partsJson 同步为选中候选(对齐"当前显示候选")。
+     */
+    fun selectSwipe(messageId: String, targetIndex: Int) {
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
+
+        val target = _messagesByConversationId.value[conversationId].orEmpty()
+            .firstOrNull { it.id == messageId } ?: return
+        val updated = MessageSwipes.selectCandidate(target, targetIndex)
+        if (updated === target) return
+
+        viewModelScope.launch {
+            conversationRepository.updateMessageSwipes(
+                messageId = updated.id,
+                selectedParts = updated.parts,
+                swipes = updated.swipes,
+                swipeIndex = updated.swipeIndex,
+            )
+            updateMessageInMemory(conversationId, updated)
         }
     }
 
@@ -1542,7 +1596,53 @@ class ChatViewModel @Inject constructor(
         reasoningContent: String = "",
         reasoningDurationMillis: Long = 0L,
         toolMarks: List<StreamingToolMark> = emptyList(),
+        regenerateSwipeTarget: Message? = null,
     ) {
+        if (!conversationRepository.nonArchivedConversationExists(conversationId)) return
+
+        val assistantParts = buildAssistantParts(
+            conversationId = conversationId,
+            content = content,
+            reasoningContent = reasoningContent,
+            reasoningDurationMillis = reasoningDurationMillis,
+            toolMarks = toolMarks,
+        )
+        // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning / 工具又都为空时 assistantParts 会空。
+        // 不落空消息(否则渲染出一条只能长按、内容空白的行)。
+        if (assistantParts.isEmpty()) return
+
+        // 重生最后一条 assistant 消息:把旧回复并入 swipe 候选,新回复追加并选中,不新增消息行。
+        if (regenerateSwipeTarget != null) {
+            mergeRegeneratedSwipe(conversationId, regenerateSwipeTarget, assistantParts)
+            return
+        }
+
+        val createdAt = System.currentTimeMillis()
+        appendMessage(
+            conversationId = conversationId,
+            message = Message(
+                id = createMessageId("assistant"),
+                role = "assistant",
+                parts = assistantParts,
+            ),
+            createdAt = createdAt,
+        )
+        refreshConversationTime(conversationId, createdAt)
+    }
+
+    /**
+     * 把流式产出的正文 / 思考 / 工具标记组装成有序 parts。空列表 = 无可落库内容(由调用方决定不落)。
+     *
+     * 抽出来让"新增 assistant 消息"和"重生并入 swipe 候选"两条落库路径共用同一套组装逻辑,
+     * 避免重生路径自己再拼一遍 reasoning / 工具交错。
+     */
+    private suspend fun buildAssistantParts(
+        conversationId: String,
+        content: String,
+        reasoningContent: String,
+        reasoningDurationMillis: Long,
+        toolMarks: List<StreamingToolMark>,
+    ): List<MessagePart> {
         val reasoningSplit = GeneratedContentSanitizer.splitReasoningFromAnswer(content)
         // answerContent 不在这里 trimEnd:工具切点 contentOffset 是针对未裁剪的正文记录的,
         // 提前 trim 会让切点错位。裁剪只在最后一段文本上做。
@@ -1554,11 +1654,10 @@ class ChatViewModel @Inject constructor(
                 append(reasoningSplit.reasoningContent.trimEnd())
             }
         }.trimEnd()
-        if (answerContent.isBlank() && normalizedReasoningContent.isBlank() && toolMarks.isEmpty()) return
-        if (!conversationRepository.nonArchivedConversationExists(conversationId)) return
-
-        val createdAt = System.currentTimeMillis()
-        val assistantParts = buildList {
+        if (answerContent.isBlank() && normalizedReasoningContent.isBlank() && toolMarks.isEmpty()) {
+            return emptyList()
+        }
+        return buildList {
             if (normalizedReasoningContent.isNotBlank()) {
                 add(
                     MessagePart.Reasoning(
@@ -1569,19 +1668,42 @@ class ChatViewModel @Inject constructor(
             }
             addAll(buildInterleavedToolAndTextParts(conversationId, answerContent, toolMarks))
         }
-        // 口径收口:AI_OUTPUT 正则可能把正文替换成空串,reasoning / 工具又都为空时 assistantParts 会空。
-        // 不落空消息(否则渲染出一条只能长按、内容空白的行)。
-        if (assistantParts.isEmpty()) return
-        appendMessage(
-            conversationId = conversationId,
-            message = Message(
-                id = createMessageId("assistant"),
-                role = "assistant",
-                parts = assistantParts,
-            ),
-            createdAt = createdAt,
+    }
+
+    /**
+     * 把重新生成的回复并入目标消息的 swipe 候选:旧版本保留为已有候选,新回复追加并选中。
+     *
+     * 落库走 updateMessageSwipes 更新同一条消息。注意:并入前 beforeBuildMessages 已用
+     * keepMessagesBefore 把目标消息移出内存历史,所以这里的 updateMessageInMemory 在并入路径上
+     * 通常是 no-op(内存里已无同 id 消息);内存最终由 observeMessages 的 DB Flow emit 带回(含新候选)。
+     * 保留这次调用是为了在 Flow 尚未 emit 的极短窗口里尽量贴近最终态,不依赖它做正确性兜底。
+     */
+    private suspend fun mergeRegeneratedSwipe(
+        conversationId: String,
+        target: Message,
+        newParts: List<MessagePart>,
+    ) {
+        val merged = MessageSwipes.appendRegeneratedCandidate(target, newParts)
+        conversationRepository.updateMessageSwipes(
+            messageId = merged.id,
+            selectedParts = merged.parts,
+            swipes = merged.swipes,
+            swipeIndex = merged.swipeIndex,
         )
-        refreshConversationTime(conversationId, createdAt)
+        updateMessageInMemory(conversationId, merged)
+        refreshConversationTime(conversationId, System.currentTimeMillis())
+    }
+
+    /** 用更新后的消息替换内存里同 id 的消息,并同步 [_currentMessages]。 */
+    private fun updateMessageInMemory(conversationId: String, updatedMessage: Message) {
+        _messagesByConversationId.update { messagesByConversationId ->
+            val nextMessages = messagesByConversationId[conversationId].orEmpty()
+                .map { message -> if (message.id == updatedMessage.id) updatedMessage else message }
+            messagesByConversationId + (conversationId to nextMessages)
+        }
+        if (_currentConversationId.value == conversationId) {
+            _currentMessages.value = _messagesByConversationId.value[conversationId].orEmpty()
+        }
     }
 
     /**
@@ -1848,6 +1970,7 @@ class ChatViewModel @Inject constructor(
 
     private suspend fun streamAssistantReplyForConversation(
         conversationId: String,
+        regenerateSwipeTarget: Message? = null,
         beforeBuildMessages: suspend () -> Unit = {},
     ) {
         providerRepository.initialize()
@@ -1926,6 +2049,7 @@ class ChatViewModel @Inject constructor(
                         finalReasoningContent,
                         finalReasoningDurationMillis,
                         finalToolMarks,
+                        regenerateSwipeTarget,
                     )
                     _isReplying.value = false
                 }

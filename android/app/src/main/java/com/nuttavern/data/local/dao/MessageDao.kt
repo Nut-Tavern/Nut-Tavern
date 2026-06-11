@@ -31,6 +31,20 @@ interface MessageDao {
         partsJson: String,
     )
 
+    @Query(
+        """
+        UPDATE messages
+        SET partsJson = :partsJson, swipesJson = :swipesJson, swipeIndex = :swipeIndex
+        WHERE id = :messageId
+        """,
+    )
+    suspend fun updateSwipesById(
+        messageId: String,
+        partsJson: String,
+        swipesJson: String,
+        swipeIndex: Int,
+    )
+
     @Query("DELETE FROM messages WHERE conversationId = :conversationId")
     suspend fun deleteByConversationId(conversationId: String)
 
