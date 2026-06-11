@@ -566,6 +566,12 @@ class ChatViewModel @Inject constructor(
             _currentEnabledToolIds.value = defaultToolIdsForPlaceholder(restoredToolMode)
             _currentEnabledLorebookIds.value = emptySet()
             _currentMessages.value = emptyList()
+            // 上次在"身份还没异步解析完"的瞬间被持久化:persona 存的是 null(未初始化)。
+            // 显式"无身份"持久化成 "none" 字符串,不会落到这里,所以只针对 null 重新解析,
+            // 避免重启后工作台短暂显示"无身份"。无角色占位态同样回退默认身份。
+            if (saved.personaId == null) {
+                restartNewConversationPersonaResolution(saved.characterId)
+            }
             return
         }
 
@@ -823,11 +829,7 @@ class ChatViewModel @Inject constructor(
         _currentEnabledToolIds.value = defaultEnabledToolIdsForNewConversation()
         _currentToolMode.value = toolModeForEnabledToolIds(_currentEnabledToolIds.value)
         _currentEnabledLorebookIds.value = emptySet()
-        newConversationPersonaJob?.cancel()
-        _currentPersonaId.value = null
-        newConversationPersonaJob = viewModelScope.launch {
-            _currentPersonaId.value = resolveInitialPersonaIdForCharacter(characterId)
-        }
+        restartNewConversationPersonaResolution(characterId)
         newConversationPresetJob?.cancel()
         _currentPresetId.value = null
         newConversationPresetJob = viewModelScope.launch {
@@ -844,11 +846,7 @@ class ChatViewModel @Inject constructor(
     fun selectCharacterForNewConversation(characterId: String?) {
         _currentCharacterId.value = characterId
         if (_currentConversationId.value.isBlank()) {
-            newConversationPersonaJob?.cancel()
-            _currentPersonaId.value = null
-            newConversationPersonaJob = viewModelScope.launch {
-                _currentPersonaId.value = resolveInitialPersonaIdForCharacter(characterId)
-            }
+            restartNewConversationPersonaResolution(characterId)
         }
     }
 
@@ -2090,6 +2088,18 @@ class ChatViewModel @Inject constructor(
             defaultPersonaId = personaRepository.defaultPersonaId.first(),
             characterId = characterId,
         )
+    }
+
+    /**
+     * 新会话占位态身份解析:先清空成"未初始化"(null),再异步按角色绑定 / 默认身份解析。
+     * 每次重启取消上一个未完成的解析,避免旧角色的解析结果覆盖当前选择。
+     */
+    private fun restartNewConversationPersonaResolution(characterId: String?) {
+        newConversationPersonaJob?.cancel()
+        _currentPersonaId.value = null
+        newConversationPersonaJob = viewModelScope.launch {
+            _currentPersonaId.value = resolveInitialPersonaIdForCharacter(characterId)
+        }
     }
 
     private fun cancelNewConversationInitializers() {
