@@ -23,9 +23,11 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -71,6 +73,7 @@ import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.PlugZap
 import com.composables.icons.lucide.SquarePen
 import com.composables.icons.lucide.Trash2
+import com.composables.icons.lucide.X
 import com.nuttavern.data.model.ClaudePromptCacheTtl
 import com.nuttavern.data.model.Model
 import com.nuttavern.data.model.Provider
@@ -776,6 +779,7 @@ private fun ProviderModelsTab(
     ) {
         items(provider.models, key = { it.id }) { model ->
             SwipeToDeleteModelCard(
+                modifier = Modifier.animateItem(),
                 provider = provider,
                 model = model,
                 onEdit = { onEditModel(model) },
@@ -786,50 +790,63 @@ private fun ProviderModelsTab(
 }
 
 /**
- * 模型卡片左滑露出垃圾桶。完全划过(EndToStart)即认为确认删除。
+ * 模型卡片左滑露出"取消 / 删除"两个按钮,需用户主动点击删除按钮才会真正删除。
  *
- * 取舍:
- * - 不弹二次确认对话框。原因:卡片删除影响很小(模型可以从远端再加回来),弹窗会破坏滑动手势的
- *   "确认即生效"语义。如果担心误删,以后引入"删除后 5 秒撤销 Snackbar"。
- * - 滑动背景用 `errorContainer`,垃圾桶图标用 `onErrorContainer`,符合危险动作配色约束。
- * - `confirmValueChange` 接住 EndToStart 状态,执行删除并返回 true(允许真正消失)。
+ * 取舍(对齐 rikkahub `SettingProviderDetailPage.kt:1246-1283`):
+ * - 不再"完全划过即删":之前 `confirmValueChange = EndToStart -> onDelete` 是单手势误删高发场景,
+ *   列表滑动惯性、误触都会触发不可撤销删除,且没有二次确认或撤销 Snackbar。
+ * - 改成"侧滑只露出操作区,删除走二级按钮":手势收敛在"打开抽屉",真正的破坏动作交给显式点击,
+ *   等价于隐式二次确认,但不打断滑动节奏。
+ * - 取消按钮(`Lucide.X`)调 `dismissState.reset()` 把卡片滑回原位;删除按钮(`Lucide.Trash2`)
+ *   先 `onDelete()` 再 reset(reset 防止下一次进入页面时残留滑出状态)。
+ * - 操作区无背景色(透明漏底),删除按钮用 `FilledIconButton` 承载红色警告让破坏动作视觉主导,
+ *   取消按钮用普通 `IconButton`(权重低)。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun SwipeToDeleteModelCard(
+    modifier: Modifier = Modifier,
     provider: Provider,
     model: Model,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val dismissState = rememberSwipeToDismissBoxState(
-        confirmValueChange = { value ->
-            if (value == SwipeToDismissBoxValue.EndToStart) {
-                onDelete()
-                true
-            } else {
-                false
-            }
-        },
-    )
+    val dismissState = rememberSwipeToDismissBoxState()
+    val scope = rememberCoroutineScope()
 
     SwipeToDismissBox(
+        modifier = modifier,
         state = dismissState,
         backgroundContent = {
-            // 仅左滑(EndToStart)露出红色背景;其他方向不允许,这里也不绘制内容。
+            // 仅左滑(EndToStart)露出操作区;其他方向不允许,这里也不绘制内容。
             if (dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                    shape = MaterialTheme.shapes.large,
+                Row(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.End,
+                    IconButton(
+                        onClick = {
+                            scope.launch { dismissState.reset() }
+                        },
+                    ) {
+                        Icon(
+                            imageVector = Lucide.X,
+                            contentDescription = "取消",
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                    FilledIconButton(
+                        onClick = {
+                            onDelete()
+                            scope.launch { dismissState.reset() }
+                        },
+                        colors = IconButtonDefaults.filledIconButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
                     ) {
                         Icon(
                             imageVector = Lucide.Trash2,
