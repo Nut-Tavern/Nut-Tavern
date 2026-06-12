@@ -17,10 +17,17 @@ object MessageSwipes {
      *   选中新回复。这样旧回复不丢,用户可切回。
      * - 消息已有 swipe:保留全部已有候选,新回复追加为最后一个并选中。
      *
-     * @param newParts 新生成回复的 parts。
+     * @param newParts 新生成回复的 parts。**禁止传空列表** —— 空候选会导致用户切回时看到空白
+     *   消息(parts 同步为空 list);调用方必须先用 [buildAssistantParts] 等组装出至少一个 part
+     *   才允许调本函数。空回复场景应走"不落库"路径,不要并入 swipe。
      * @return 并入后的消息(parts 同步为新候选,swipeIndex 指向新候选)。
+     * @throws IllegalArgumentException 当 [newParts] 为空时。
      */
     fun appendRegeneratedCandidate(message: Message, newParts: List<MessagePart>): Message {
+        require(newParts.isNotEmpty()) {
+            "appendRegeneratedCandidate 不接受空 parts:空候选会让用户切回时看到空白消息," +
+                "调用方应在空回复场景走不落库路径。"
+        }
         val existingCandidates = if (message.swipes.isEmpty()) {
             listOf(message.parts)
         } else {

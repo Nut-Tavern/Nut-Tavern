@@ -365,6 +365,33 @@ class ChatViewModel @Inject constructor(
     private var newConversationPresetJob: Job? = null
 
     /**
+     * "生成新候选"路径正在跑时持有目标消息;`stopGeneration` 中途停止时用它把 partial 内容
+     * 并入 swipe 候选,而不是当成新增 assistant 消息追加(对齐流式正常结束路径的处理)。
+     *
+     * 设置时机:`generateNewSwipe` 调 `launchRegenerationJob` 之前同步设入。
+     *
+     * 清除时机:两层兜底——
+     * 1. [launchRegenerationJob] 的 finally 块是**所有路径的最终汇合点**,覆盖
+     *    [streamAssistantReplyForConversation] 早 return(provider/apiKey/baseUrl 校验失败,
+     *    line 2137-2152)路径——这条路径不抛异常、不进 catch、也不调 [clearStreamingState]
+     *    (因 _streamingConversationId 还没设),只能靠 finally 兜底。
+     * 2. [clearStreamingState] 内部无条件清(放在 conversationId gate 外),覆盖正常结束 /
+     *    异常 / 取消三路径的 streaming 状态收敛。
+     * 两层在重生路径上有 double-clear,但 `null = null` 无副作用;两者覆盖面不同——删
+     * finally 会让早 return 路径漏清;删 clearStreamingState 那行会让跨 conversationId
+     * 调用漏清。两个都不能省。
+     *
+     * 仅 main 线程读写。读写点:
+     * - `generateNewSwipe`(fun,UI 调用,main)
+     * - `stopGeneration`(fun,UI 调用,main)
+     * - `clearStreamingState`(fun,main)
+     * - `launchRegenerationJob` 的 finally 块(viewModelScope = Dispatchers.Main.immediate,仍 main)
+     *
+     * 无需 @Volatile / StateFlow:UI 不消费,只供 [stopGeneration] 内部读取。
+     */
+    private var currentSwipeRegenerateTarget: Message? = null
+
+    /**
      * 是否已完成"启动持久化恢复"。在恢复完成之前,自动恢复路径
      * ([nonArchivedConversations.collect] / [selectLatestConversationForAssistant])
      * 不去主动挑会话,避免覆盖用户上次的占位态(典型场景:上次切到了没会话的角色)。
@@ -784,6 +811,12 @@ class ChatViewModel @Inject constructor(
             val partialReasoningContent = _streamingReasoningContent.value.trimEnd()
             val partialReasoningDurationMillis = _streamingReasoningDurationMillis.value
             val partialToolMarks = _streamingToolMarks.value
+            // 先快照 swipe 重生目标,再调 clearStreamingState 清状态,最后落库。
+            // 顺序敏感:clearStreamingState 会无条件把 currentSwipeRegenerateTarget 清回 null
+            // (见 clearStreamingState KDoc 契约 2),所以必须先读出来。
+            // 调换 816/817 顺序会让 swipeTarget 永远拿到 null → partial 退化为新增 assistant
+            // 消息追加而不是并入 swipe 候选 → P1-12 bug 回归。
+            val swipeTarget = currentSwipeRegenerateTarget
             clearStreamingState(conversationId)
             if (partialContent.isNotBlank() || partialReasoningContent.isNotBlank() || partialToolMarks.isNotEmpty()) {
                 viewModelScope.launch {
@@ -793,6 +826,7 @@ class ChatViewModel @Inject constructor(
                         partialReasoningContent,
                         partialReasoningDurationMillis,
                         partialToolMarks,
+                        regenerateSwipeTarget = swipeTarget,
                     )
                 }
             }
@@ -1329,6 +1363,10 @@ class ChatViewModel @Inject constructor(
         val messages = _currentMessages.value
         if (messages.lastOrNull()?.id != message.id) return
 
+        // 设入 target:供 stopGeneration 中途停止时把 partial 并入 swipe 候选,
+        // 而非当成新消息追加。clearStreamingState 会清回 null。
+        currentSwipeRegenerateTarget = message
+
         launchRegenerationJob(
             conversationId = conversationId,
             errorMessage = "生成失败，请检查网络、提供商配置或模型名称",
@@ -1351,12 +1389,12 @@ class ChatViewModel @Inject constructor(
     private fun launchRegenerationJob(
         conversationId: String,
         errorMessage: String,
-        block: suspend () -> Unit,
+        regenerationBlock: suspend () -> Unit,
     ) {
         _isReplying.value = true
         streamingJob = viewModelScope.launch {
             try {
-                block()
+                regenerationBlock()
             } catch (e: CancellationException) {
                 clearStreamingState(conversationId)
                 _isReplying.value = false
@@ -1364,6 +1402,15 @@ class ChatViewModel @Inject constructor(
                 _errorMessage.value = errorMessage
                 clearStreamingState(conversationId)
                 _isReplying.value = false
+            } finally {
+                // 兜底清 swipe 重生目标:覆盖 streamAssistantReplyForConversation 早 return
+                // (provider/apiKey/baseUrl 校验失败,line 2137-2152)路径——这条路径不抛异常、
+                // 不进 catch、也不经过 clearStreamingState(因 _streamingConversationId 还没设),
+                // 字段会残留并污染下一次 stopGeneration 的快照。
+                // 注意:不能用 clearStreamingState 内的"挪出 gate 清"代替这里——那一招覆盖正常
+                // 结束 / 异常 / 取消三路径,但**不覆盖早 return**(早 return 根本不调 clearStreamingState)。
+                // 删除本 finally 块会让 P1-12 bug 重新回归。
+                currentSwipeRegenerateTarget = null
             }
         }
     }
@@ -2584,6 +2631,22 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * 流式状态收敛入口。被 streamAssistantReplyForConversation / sendMessage / stopGeneration /
+     * launchRegenerationJob 等所有流式终结路径调用。
+     *
+     * 副作用契约:
+     * 1. 当 [_streamingConversationId] 与传入 [conversationId] 一致时,清空所有流式状态字段
+     *    (内容缓冲 / reasoning / tool 标记 / 计时 job)。不一致时这一段是 no-op。
+     * 2. **无论 conversationId 是否匹配**,都会无条件把 [currentSwipeRegenerateTarget] 清为
+     *    null。语义是"上一次重生路径已结束",与具体会话无关。
+     *
+     * 调用方约束:需要快照 [currentSwipeRegenerateTarget] 的调用方必须在调本函数**之前**
+     * 读取(参见 [stopGeneration]),否则会拿到 null。
+     *
+     * 若未来需要"只清某会话流式状态而保留 swipe target"的场景,需另起一个不动 swipe target
+     * 的私有函数,不要绕过本函数的契约。
+     */
     private fun clearStreamingState(conversationId: String) {
         if (_streamingConversationId.value == conversationId) {
             _streamingConversationId.value = null
@@ -2599,6 +2662,9 @@ class ChatViewModel @Inject constructor(
             streamingReasoningTimerJob?.cancel()
             streamingReasoningTimerJob = null
         }
+        // swipe 重生目标的语义是"上一次重生路径已结束",与具体 conversationId 无关,
+        // 必须放在 gate 外清,避免跨会话调 clearStreamingState 时漏清残留。
+        currentSwipeRegenerateTarget = null
     }
 
     private fun getSystemPrompt(provider: Provider, model: Model): String {

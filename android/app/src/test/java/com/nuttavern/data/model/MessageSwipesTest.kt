@@ -2,6 +2,7 @@ package com.nuttavern.data.model
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -57,6 +58,17 @@ class MessageSwipesTest {
         assertEquals(oldParts, merged.swipes[0])
         assertEquals(text("直接说:晚上八点"), merged.swipes[1])
         assertEquals(1, merged.swipeIndex)
+    }
+
+    @Test
+    fun appendRegenerated_emptyNewParts_throws() {
+        // 锁住调用契约:空候选并入会让用户切回时看到空白消息。空回复场景调用方应走"不落库"路径
+        // (ChatViewModel 在 assistantParts.isEmpty() 时早返回),不应到达本函数。
+        val message = assistantMessage(parts = text("旧回复"))
+
+        assertThrows(IllegalArgumentException::class.java) {
+            MessageSwipes.appendRegeneratedCandidate(message, emptyList())
+        }
     }
 
     @Test

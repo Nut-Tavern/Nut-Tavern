@@ -47,10 +47,12 @@ internal fun RegenerateMessageDialog(
     //      中间 user 会同时丢弃之后所有消息再重生(Nut Tavern 既有 user 重走语义)。
     //   2. 末条 assistant:删除当前回复(含所有 swipes)并重生(对齐酒馆 option_regenerate)。
     val title = if (isUserMessage) "重新生成回复" else "重新生成"
-    val description = if (isUserMessage) {
-        "将丢弃这条消息之后的所有回复并重新生成。"
-    } else {
-        "将删除当前回复并重新生成。原回复的所有候选会一起丢失。"
+    val description = when {
+        isUserMessage -> "将丢弃这条消息之后的所有回复并重新生成。"
+        // 多候选 assistant:重生会把整批候选连同当前回复一起删掉,必须显式提示。
+        message.hasMultipleSwipes -> "将删除当前回复并重新生成。原回复的所有候选会一起丢失。"
+        // 单候选 assistant:本来就只有一条回复,提"所有候选会一起丢失"是冗余且让人困惑。
+        else -> "将删除当前回复并重新生成。"
     }
 
     AlertDialog(
