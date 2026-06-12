@@ -1704,30 +1704,8 @@ class ChatViewModel @Inject constructor(
      * 对齐酒馆 `reasoning.js:409`:在 reasoning 写入消息(chat file)前跑,只传 placement,
      * 不带 isMarkdown / isPrompt / depth(改文件场景)。短暂模式脚本不在这里跑。
      */
-    private suspend fun applyReasoningRegex(conversationId: String, raw: String): String {
-        if (raw.isEmpty()) return raw
-        val conversation = findConversationById(conversationId)
-            ?: return raw
-        val character = conversation.characterId
-            ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
-        val preset = resolvePresetForConversation(conversation.presetId)
-        val bundle = resolveRegexScopeBundle(
-            conversation.enabledRegexGroupIds,
-            conversation.enabledOrphanRegexIds,
-            character,
-            preset,
-        )
-
-        return regexEngine.getRegexedString(
-            raw = raw,
-            placement = RegexPlacement.REASONING,
-            globalScripts = bundle.globalScripts,
-            scopedScripts = bundle.scopedScripts,
-            presetScripts = bundle.presetScripts,
-            characterAllowed = bundle.characterAllowed,
-            presetAllowed = bundle.presetAllowed,
-        )
-    }
+    private suspend fun applyReasoningRegex(conversationId: String, raw: String): String =
+        applyChatFileRegex(conversationId, raw, RegexPlacement.REASONING)
 
     /**
      * 把流式产出的正文 / 思考 / 工具标记组装成有序 parts。空列表 = 无可落库内容(由调用方决定不落)。
@@ -1852,30 +1830,8 @@ class ChatViewModel @Inject constructor(
      * **改聊天文件场景**:`isMarkdown=false && isPrompt=false`,只跑两个 Ephemerality 开关都不勾的脚本。
      * 短暂模式(`promptOnly=true`)的脚本不在这里跑 —— 它们要在 PromptComposer 拼接时跑。
      */
-    private suspend fun applyAiOutputRegex(conversationId: String, raw: String): String {
-        if (raw.isEmpty()) return raw
-        val conversation = findConversationById(conversationId)
-            ?: return raw
-        val character = conversation.characterId
-            ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
-        val preset = resolvePresetForConversation(conversation.presetId)
-        val bundle = resolveRegexScopeBundle(
-            conversation.enabledRegexGroupIds,
-            conversation.enabledOrphanRegexIds,
-            character,
-            preset,
-        )
-
-        return regexEngine.getRegexedString(
-            raw = raw,
-            placement = RegexPlacement.AI_OUTPUT,
-            globalScripts = bundle.globalScripts,
-            scopedScripts = bundle.scopedScripts,
-            presetScripts = bundle.presetScripts,
-            characterAllowed = bundle.characterAllowed,
-            presetAllowed = bundle.presetAllowed,
-        )
-    }
+    private suspend fun applyAiOutputRegex(conversationId: String, raw: String): String =
+        applyChatFileRegex(conversationId, raw, RegexPlacement.AI_OUTPUT)
 
     /**
      * 用户输入落库前先跑 USER_INPUT 改文件正则,对齐酒馆 `sendMessageAsUser` 调用。
@@ -1883,7 +1839,28 @@ class ChatViewModel @Inject constructor(
      * **改聊天文件场景**:`isMarkdown=false && isPrompt=false`,只跑两个 Ephemerality 都不勾的脚本。
      * 短暂模式(`promptOnly=true`)在 PromptComposer A0 阶段再跑一次,各管各的脚本。
      */
-    private suspend fun applyUserInputRegexForChatFile(conversationId: String, raw: String): String {
+    private suspend fun applyUserInputRegexForChatFile(conversationId: String, raw: String): String =
+        applyChatFileRegex(conversationId, raw, RegexPlacement.USER_INPUT)
+
+    /**
+     * 改聊天文件场景下统一跑一次指定 placement 的正则。
+     *
+     * 三个调用点(applyAiOutputRegex / applyUserInputRegexForChatFile / applyReasoningRegex)
+     * 公共逻辑在这里收敛:取会话 → 取 character/preset → 拼三作用域脚本快照 → 跑 RegexEngine。
+     * 调用方只需选 placement,不再重复贴 5 步样板。
+     *
+     * 行为约束(三处共用):
+     * - `raw` 为空时直接返回原文,不进 RegexEngine。
+     * - 会话查不到时返回原文,不阻塞落库(并发删会话场景)。
+     * - character 取不到时按"无 character"处理(scopedScripts 为空),不抛错。
+     * - 改文件场景调用方:`isMarkdown=false && isPrompt=false` 隐含在 RegexEngine 默认行为里;
+     *   短暂模式脚本由 PromptComposer 单独跑,**不在这条路径**。
+     */
+    private suspend fun applyChatFileRegex(
+        conversationId: String,
+        raw: String,
+        placement: RegexPlacement,
+    ): String {
         if (raw.isEmpty()) return raw
         val conversation = findConversationById(conversationId)
             ?: return raw
@@ -1899,7 +1876,7 @@ class ChatViewModel @Inject constructor(
 
         return regexEngine.getRegexedString(
             raw = raw,
-            placement = RegexPlacement.USER_INPUT,
+            placement = placement,
             globalScripts = bundle.globalScripts,
             scopedScripts = bundle.scopedScripts,
             presetScripts = bundle.presetScripts,
@@ -1910,7 +1887,8 @@ class ChatViewModel @Inject constructor(
 
     /**
      * 三作用域正则脚本快照,统一供 USER_INPUT / AI_OUTPUT / REASONING / WORLD_INFO
-     * 四个调用点取用,确保口径一致。
+     * 四种 placement 取用,确保口径一致(改文件 3 placement 经 `applyChatFileRegex` 共用,
+     * WORLD_INFO 经 `runLorebookActivation` 单独消费)。
      */
     private data class RegexScopeBundle(
         val globalScripts: List<com.nuttavern.data.regex.RegexScript>,
@@ -1928,8 +1906,10 @@ class ChatViewModel @Inject constructor(
      * - PRESET:preset.presetRegexScripts();
      * - 用户级开关:currentRegexScopeFlags()。
      *
-     * 4 个调用点(applyAiOutputRegex / applyUserInputRegexForChatFile / applyReasoningRegex /
-     * runLorebookActivation 内的 contentRegexHook)统一从此 helper 取,集中管理可变逻辑。
+     * 调用点:
+     * - 改文件路径:`applyChatFileRegex`(USER_INPUT / AI_OUTPUT / REASONING 三 placement 共用);
+     * - 世界书激活路径:`runLorebookActivation` 内的 `contentRegexHook`(WORLD_INFO placement)。
+     * 集中管理可变逻辑,避免每个调用点自己拼一遍三作用域脚本。
      */
     private suspend fun resolveRegexScopeBundle(
         enabledGroupIdsJson: String?,
