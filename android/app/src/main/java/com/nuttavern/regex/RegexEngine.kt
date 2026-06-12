@@ -31,8 +31,15 @@ import javax.inject.Singleton
  *
  * - [com.nuttavern.prompt.PromptComposer] 处理用户输入(USER_INPUT 阶段):传 `isPrompt=true`,
  *   只跑 `promptOnly=true` 的脚本(短暂改 prompt,不动用户输入文件);
- * - [com.nuttavern.ui.viewmodel.ChatViewModel.applyAiOutputRegex] 落库前处理 AI 回复:两个都 false,
- *   只跑 `markdownOnly=false && promptOnly=false` 的脚本(永久改聊天文件)。
+ * - [com.nuttavern.ui.viewmodel.ChatViewModel.applyAiOutputRegex] 落库前处理 AI 回复(AI_OUTPUT 阶段):
+ *   两个都 false,只跑 `markdownOnly=false && promptOnly=false` 的脚本(永久改聊天文件);
+ * - [com.nuttavern.ui.viewmodel.ChatViewModel.applyUserInputRegexForChatFile] 用户输入落库前
+ *   (USER_INPUT 阶段):两个都 false,只跑改文件脚本;
+ * - [com.nuttavern.ui.viewmodel.ChatViewModel.applyReasoningRegex] reasoning 落库前(REASONING 阶段):
+ *   对齐酒馆 `reasoning.js:409`,两个都 false,只跑改文件脚本;
+ * - [com.nuttavern.ui.viewmodel.ChatViewModel.runLorebookActivation] 世界书激活(WORLD_INFO 阶段):
+ *   对齐酒馆 `world-info.js:5085-5086`,传 `isPrompt=true` + `depth=regexDepth`(仅 AT_DEPTH entry
+ *   传 entry.depth,其余位置传 null),只跑 `promptOnly=true` 的脚本。
  *
  * 我们没有"markdown 渲染"独立阶段(Compose UI 实时渲染,不再跑正则)。如果未来加这个阶段,
  * 调用方传 `isMarkdown=true` 即可,引擎逻辑无需改。

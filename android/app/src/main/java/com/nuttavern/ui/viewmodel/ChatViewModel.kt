@@ -1699,6 +1699,37 @@ class ChatViewModel @Inject constructor(
     }
 
     /**
+     * 对模型 reasoning 文本跑一次 REASONING 阶段正则。会话查不到 / 脚本为空时返回原文。
+     *
+     * 对齐酒馆 `reasoning.js:409`:在 reasoning 写入消息(chat file)前跑,只传 placement,
+     * 不带 isMarkdown / isPrompt / depth(改文件场景)。短暂模式脚本不在这里跑。
+     */
+    private suspend fun applyReasoningRegex(conversationId: String, raw: String): String {
+        if (raw.isEmpty()) return raw
+        val conversation = findConversationById(conversationId)
+            ?: return raw
+        val character = conversation.characterId
+            ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
+        val preset = resolvePresetForConversation(conversation.presetId)
+        val bundle = resolveRegexScopeBundle(
+            conversation.enabledRegexGroupIds,
+            conversation.enabledOrphanRegexIds,
+            character,
+            preset,
+        )
+
+        return regexEngine.getRegexedString(
+            raw = raw,
+            placement = RegexPlacement.REASONING,
+            globalScripts = bundle.globalScripts,
+            scopedScripts = bundle.scopedScripts,
+            presetScripts = bundle.presetScripts,
+            characterAllowed = bundle.characterAllowed,
+            presetAllowed = bundle.presetAllowed,
+        )
+    }
+
+    /**
      * 把流式产出的正文 / 思考 / 工具标记组装成有序 parts。空列表 = 无可落库内容(由调用方决定不落)。
      *
      * 抽出来让"新增 assistant 消息"和"重生并入 swipe 候选"两条落库路径共用同一套组装逻辑,
@@ -1722,14 +1753,17 @@ class ChatViewModel @Inject constructor(
                 append(reasoningSplit.reasoningContent.trimEnd())
             }
         }.trimEnd()
-        if (answerContent.isBlank() && normalizedReasoningContent.isBlank() && toolMarks.isEmpty()) {
+        // REASONING 正则在 reasoning 写入 message 前跑(对齐酒馆 reasoning.js:409)。
+        // 跑完为空时不落 Reasoning part(空 reasoning 渲染没意义,与 applyAiOutputRegex 把正文跑空不落同口径)。
+        val processedReasoning = applyReasoningRegex(conversationId, normalizedReasoningContent)
+        if (answerContent.isBlank() && processedReasoning.isBlank() && toolMarks.isEmpty()) {
             return emptyList()
         }
         return buildList {
-            if (normalizedReasoningContent.isNotBlank()) {
+            if (processedReasoning.isNotBlank()) {
                 add(
                     MessagePart.Reasoning(
-                        text = normalizedReasoningContent,
+                        text = processedReasoning,
                         durationMillis = maxOf(100L, reasoningDurationMillis),
                     )
                 )
@@ -1825,21 +1859,21 @@ class ChatViewModel @Inject constructor(
         val character = conversation.characterId
             ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
         val preset = resolvePresetForConversation(conversation.presetId)
-        val globalScripts = resolveRegexScriptsForConversation(
+        val bundle = resolveRegexScopeBundle(
             conversation.enabledRegexGroupIds,
             conversation.enabledOrphanRegexIds,
+            character,
+            preset,
         )
-        val presetScripts = preset.presetRegexScripts()
-        val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         return regexEngine.getRegexedString(
             raw = raw,
             placement = RegexPlacement.AI_OUTPUT,
-            globalScripts = globalScripts,
-            scopedScripts = character?.regexScripts.orEmpty(),
-            presetScripts = presetScripts,
-            characterAllowed = characterAllowed,
-            presetAllowed = presetAllowed,
+            globalScripts = bundle.globalScripts,
+            scopedScripts = bundle.scopedScripts,
+            presetScripts = bundle.presetScripts,
+            characterAllowed = bundle.characterAllowed,
+            presetAllowed = bundle.presetAllowed,
         )
     }
 
@@ -1856,19 +1890,58 @@ class ChatViewModel @Inject constructor(
         val character = conversation.characterId
             ?.let { runCatching { characterRepository.getCharacterById(it) }.getOrNull() }
         val preset = resolvePresetForConversation(conversation.presetId)
-        val globalScripts = resolveRegexScriptsForConversation(
+        val bundle = resolveRegexScopeBundle(
             conversation.enabledRegexGroupIds,
             conversation.enabledOrphanRegexIds,
+            character,
+            preset,
         )
-        val presetScripts = preset.presetRegexScripts()
-        val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
 
         return regexEngine.getRegexedString(
             raw = raw,
             placement = RegexPlacement.USER_INPUT,
-            globalScripts = globalScripts,
+            globalScripts = bundle.globalScripts,
+            scopedScripts = bundle.scopedScripts,
+            presetScripts = bundle.presetScripts,
+            characterAllowed = bundle.characterAllowed,
+            presetAllowed = bundle.presetAllowed,
+        )
+    }
+
+    /**
+     * 三作用域正则脚本快照,统一供 USER_INPUT / AI_OUTPUT / REASONING / WORLD_INFO
+     * 四个调用点取用,确保口径一致。
+     */
+    private data class RegexScopeBundle(
+        val globalScripts: List<com.nuttavern.data.regex.RegexScript>,
+        val scopedScripts: List<com.nuttavern.data.regex.RegexScript>,
+        val presetScripts: List<com.nuttavern.data.regex.RegexScript>,
+        val characterAllowed: Boolean,
+        val presetAllowed: Boolean,
+    )
+
+    /**
+     * 解析当前会话的三作用域正则脚本快照。
+     *
+     * - GLOBAL:按 [enabledGroupIdsJson] / [enabledOrphanIdsJson] 从 RegexScriptRepository 展开;
+     * - SCOPED:character.regexScripts(可空 character → 空列表);
+     * - PRESET:preset.presetRegexScripts();
+     * - 用户级开关:currentRegexScopeFlags()。
+     *
+     * 4 个调用点(applyAiOutputRegex / applyUserInputRegexForChatFile / applyReasoningRegex /
+     * runLorebookActivation 内的 contentRegexHook)统一从此 helper 取,集中管理可变逻辑。
+     */
+    private suspend fun resolveRegexScopeBundle(
+        enabledGroupIdsJson: String?,
+        enabledOrphanIdsJson: String?,
+        character: Character?,
+        preset: Preset,
+    ): RegexScopeBundle {
+        val (characterAllowed, presetAllowed) = currentRegexScopeFlags()
+        return RegexScopeBundle(
+            globalScripts = resolveRegexScriptsForConversation(enabledGroupIdsJson, enabledOrphanIdsJson),
             scopedScripts = character?.regexScripts.orEmpty(),
-            presetScripts = presetScripts,
+            presetScripts = preset.presetRegexScripts(),
             characterAllowed = characterAllowed,
             presetAllowed = presetAllowed,
         )
@@ -1878,8 +1951,7 @@ class ChatViewModel @Inject constructor(
      * 当前生效的 SCOPED / PRESET 正则总开关(对齐酒馆 character_allowed_regex / preset_allowed_regex)。
      *
      * 暂未接入 UI(总开关默认全开)。后续若加全局设置或会话级覆盖,这里是唯一改动点 —
-     * 三路(applyAiOutputRegex / applyUserInputRegexForChatFile / buildPromptForSend)
-     * 都从本 helper 取,保证口径一致。
+     * 四路调用都通过 [resolveRegexScopeBundle] 取,保证口径一致。
      */
     private fun currentRegexScopeFlags(): Pair<Boolean, Boolean> = true to true
 
@@ -2252,6 +2324,29 @@ class ChatViewModel @Inject constructor(
             maxContextTokens = preset.openaiMaxContext,
         )
 
+        // WORLD_INFO 正则:对齐酒馆 world-info.js:5085-5086,只对 entry.content 跑,
+        // 不跑 comment / wiFormat 包装。三作用域脚本与其他三个调用点共享 resolveRegexScopeBundle
+        // 同口径。regexDepth 由 LorebookEngine 按 entry.position 计算后传入(对齐 5085 行)。
+        val regexBundle = resolveRegexScopeBundle(
+            conversation?.enabledRegexGroupIds,
+            conversation?.enabledOrphanRegexIds,
+            character,
+            preset,
+        )
+        val contentRegexHook: (String, Int?) -> String = { entryContent, regexDepth ->
+            regexEngine.getRegexedString(
+                raw = entryContent,
+                placement = RegexPlacement.WORLD_INFO,
+                globalScripts = regexBundle.globalScripts,
+                scopedScripts = regexBundle.scopedScripts,
+                presetScripts = regexBundle.presetScripts,
+                characterAllowed = regexBundle.characterAllowed,
+                presetAllowed = regexBundle.presetAllowed,
+                isPrompt = true,
+                depth = regexDepth,
+            )
+        }
+
         return lorebookEngine.activate(
             messages = messages,
             messageNames = messageNames,
@@ -2260,6 +2355,7 @@ class ChatViewModel @Inject constructor(
             scanContext = scanContext,
             messageCount = history.size,
             timedEffects = decodeLorebookTimedEffects(conversation?.lorebookTimedEffectsJson),
+            contentRegexHook = contentRegexHook,
         )
     }
 

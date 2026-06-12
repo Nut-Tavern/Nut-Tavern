@@ -69,7 +69,7 @@ import kotlinx.serialization.json.Json
  * 1. 启用开关(单卡)
  * 2. 名字 + 查找正则 + 替换为 + 修剪掉(基础信息卡)
  *    - "查找正则"右上角紫色 `< >` 图标 = 测试模式触发器(展开后浮一张测试卡)
- * 3. 作用范围(胶囊多选;Slash / 世界书 / 推理块标"待接入"且 disabled)
+ * 3. 作用范围(胶囊多选;Slash 不显示)
  * 4. 执行时机(派生 enum 5 选 1 胶囊)
  * 5. 查找时的宏(SubstituteRegex 3 选 1 胶囊)
  * 6. 消息深度(min ~ max 范围输入)
@@ -421,8 +421,8 @@ private fun PlacementSheet(
     val items = listOf(
         RegexPlacement.USER_INPUT to ("用户输入" to "如:发送前规范化标点"),
         RegexPlacement.AI_OUTPUT to ("角色回复" to "如:折叠 <thinking> 块"),
-        RegexPlacement.WORLD_INFO to ("世界书" to "对世界书条目生效(待接入)"),
-        RegexPlacement.REASONING to ("推理内容" to "对推理块内容生效(待接入)"),
+        RegexPlacement.WORLD_INFO to ("世界书" to "对世界书条目正文生效"),
+        RegexPlacement.REASONING to ("推理内容" to "对模型推理块内容生效"),
     )
     val sheetState = androidx.compose.material3.rememberModalBottomSheetState(skipPartiallyExpanded = true)
     androidx.compose.material3.ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -436,13 +436,10 @@ private fun PlacementSheet(
             items.forEach { (placement, labelPair) ->
                 val (label, subtitle) = labelPair
                 val isSelected = placement.value in selected
-                val isEnabled = placement != RegexPlacement.WORLD_INFO &&
-                    placement != RegexPlacement.REASONING
                 com.nuttavern.ui.components.NutTavernSelectableRow(
                     title = label,
                     subtitle = subtitle,
                     selected = isSelected,
-                    enabled = isEnabled,
                     onClick = {
                         onChange(
                             if (isSelected) selected - placement.value

@@ -504,6 +504,8 @@ internal fun regexScriptSubtitle(script: com.nuttavern.data.regex.RegexScript): 
         when (value) {
             com.nuttavern.data.regex.RegexPlacement.USER_INPUT.value -> "用户输入"
             com.nuttavern.data.regex.RegexPlacement.AI_OUTPUT.value -> "角色回复"
+            com.nuttavern.data.regex.RegexPlacement.WORLD_INFO.value -> "世界书"
+            com.nuttavern.data.regex.RegexPlacement.REASONING.value -> "推理内容"
             else -> null
         }
     }

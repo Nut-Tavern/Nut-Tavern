@@ -2,6 +2,7 @@ package com.nuttavern.lorebook
 
 import com.nuttavern.data.lorebook.Lorebook
 import com.nuttavern.data.lorebook.LorebookEntry
+import com.nuttavern.data.lorebook.WiPosition
 import com.nuttavern.prompt.TokenCounter
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -251,5 +252,208 @@ class LorebookEngineTest {
             startMessageCount = messageCount,
             endMessageCount = endMessageCount,
         )
+    }
+
+    // ─── contentRegexHook(WORLD_INFO 阶段正则)对齐酒馆 world-info.js:5086 ─────────
+
+    @Test
+    fun contentRegexHookDefaultIsIdentity() {
+        // 不传 hook 时,行为与未引入正则一致(回归保护)。
+        val entry = entry(content = "alpha", key = listOf("alpha"))
+        val result = activate(entry, messages = listOf("alpha"), messageCount = 1)
+        assertEquals("alpha", result.worldInfoBefore)
+    }
+
+    @Test
+    fun contentRegexHookReplacesEntryContent() {
+        val entry = entry(content = "alpha", key = listOf("alpha"))
+        val result = engine.activate(
+            messages = listOf("alpha"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { raw, _ -> raw.replace("alpha", "BETA") },
+        )
+        assertEquals("BETA", result.worldInfoBefore)
+        // entry.content 仍是原值,正则只影响注入文本(对齐酒馆:不修改 entry 数据)。
+        assertEquals(listOf(entry), result.activatedEntries)
+    }
+
+    @Test
+    fun contentRegexHookEmptyReturnSkipsEntry() {
+        // 对齐酒馆 world-info.js:5088:正则把 entry.content 替换成空 → skip(不进 worldInfoBefore)。
+        val entry = entry(content = "secret", key = listOf("secret"))
+        val result = engine.activate(
+            messages = listOf("secret"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { _, _ -> "" },
+        )
+        assertEquals("", result.worldInfoBefore)
+    }
+
+    @Test
+    fun contentRegexHookOnlyTouchesEntryContentNotComment() {
+        // 对齐酒馆 world-info.js:5086:正则只跑 entry.content,不跑 comment。
+        val entry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "alpha",
+            comment = "alpha-memo",
+            addMemo = true,
+        )
+        val result = engine.activate(
+            messages = listOf("alpha"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { raw, _ -> raw.replace("alpha", "BETA") },
+        )
+        // comment 保留 "alpha-memo"(未跑正则);content 替换为 "BETA"。
+        assertTrue(
+            "expected comment unchanged + content replaced, got: ${result.worldInfoBefore}",
+            result.worldInfoBefore.contains("alpha-memo") && result.worldInfoBefore.contains("BETA"),
+        )
+        assertFalse(
+            "comment 不应被正则改动",
+            result.worldInfoBefore.contains("BETA-memo"),
+        )
+    }
+
+    @Test
+    fun contentRegexHookExceptionFallsBackToRawContent() {
+        // hook 抛异常时,LorebookEngine 应兜原文继续,保证单 entry 异常不打断整次激活。
+        val entry = entry(content = "raw content", key = listOf("raw"))
+        val result = engine.activate(
+            messages = listOf("raw"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { _, _ -> throw IllegalStateException("hook failure") },
+        )
+        assertEquals("raw content", result.worldInfoBefore)
+    }
+
+    @Test
+    fun contentRegexHookReceivesRegexDepthOnlyForAtDepthEntries() {
+        // 对齐酒馆 world-info.js:5085:regexDepth 仅在 position == AT_DEPTH 时取 entry.depth,其余位置传 null。
+        val capturedDepths = mutableListOf<Pair<String, Int?>>()
+        val beforeEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("before"),
+            content = "before-content",
+            position = WiPosition.BEFORE,
+            depth = 99, // AT_DEPTH 之外的 position 设了 depth 也应被忽略。
+        )
+        val atDepthEntry = LorebookEntry(
+            uid = 2,
+            key = listOf("atdepth"),
+            content = "atdepth-content",
+            position = WiPosition.AT_DEPTH,
+            depth = 7,
+        )
+        engine.activate(
+            messages = listOf("before atdepth"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(beforeEntry, atDepthEntry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { content, regexDepth ->
+                capturedDepths += content to regexDepth
+                content
+            },
+        )
+        // 锁住 hook 在每个 entry 上仅被调用一次,避免预跑/递归扫描误重复调。
+        assertEquals(2, capturedDepths.size)
+        // 按 entry 内容精确锁定 regexDepth 因果对应:
+        // BEFORE 位置 → null(即使 entry.depth=99 也忽略);AT_DEPTH 位置 → entry.depth=7。
+        assertEquals(null, capturedDepths.first { it.first == "before-content" }.second)
+        assertEquals(7, capturedDepths.first { it.first == "atdepth-content" }.second)
+    }
+
+    @Test
+    fun contentRegexHookPassesZeroDepthForAtDepthEntry() {
+        // entry.depth=0 是合法值(对齐酒馆 world_info_position.atDepth 允许 depth=0 → 直接插当前消息层)。
+        // 不应被等价为 null 或被 ?? DEFAULT_DEPTH 兜成 4。
+        val capturedDepths = mutableListOf<Int?>()
+        val entry = LorebookEntry(
+            uid = 1,
+            key = listOf("zero"),
+            content = "zero-depth",
+            position = WiPosition.AT_DEPTH,
+            depth = 0,
+        )
+        engine.activate(
+            messages = listOf("zero"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            contentRegexHook = { content, regexDepth ->
+                capturedDepths += regexDepth
+                content
+            },
+        )
+        assertEquals(1, capturedDepths.size)
+        assertEquals(0, capturedDepths.first())
+    }
+
+    @Test
+    fun emptyEntryContentWithAddMemoStillInjectsMemo() {
+        // 锁住 docs/modules/lorebook.md "已知坑"中登记的旧偏差行为:
+        // entry.content 原本就空 + addMemo=true + comment 非空 → 注入文本仍包含 comment。
+        // 对齐酒馆是另一回事(酒馆 5086 行只对 content 跑正则后判 if (!content) 跳过,
+        // 本仓库 formatContent 会把 comment 拼进 raw,见 docs/modules/lorebook.md "已知坑")。
+        // 此测试防止未来重构正则跳过逻辑时误把"原 content 空 + comment 非空"也跳过。
+        val entry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "",
+            comment = "memo-only",
+            addMemo = true,
+        )
+        val result = engine.activate(
+            messages = listOf("alpha"),
+            lorebooks = listOf(
+                TaggedLorebook(
+                    book = Lorebook(id = "book", name = "book", entries = listOf(entry)),
+                    isCharacterSource = false,
+                    sourceKey = "book",
+                ),
+            ),
+            messageCount = 1,
+            // hook 不动 content(空进空出),不应触发跳过分支(因为原 content 就是空,不是被正则跑空的)。
+            contentRegexHook = { content, _ -> content },
+        )
+        assertEquals("memo-only", result.worldInfoBefore)
     }
 }

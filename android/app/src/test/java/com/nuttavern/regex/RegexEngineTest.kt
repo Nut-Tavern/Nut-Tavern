@@ -423,6 +423,93 @@ class RegexEngineTest {
     }
 
     @Test
+    fun worldInfoPlacementRunsOnlyWorldInfoScripts() {
+        // 对齐酒馆 world-info.js:5086 调用语义:WORLD_INFO 阶段以 isPrompt=true 调,
+        // 因此只跑 promptOnly=true 的脚本(短暂改 prompt)。
+        // 默认脚本(markdownOnly=false && promptOnly=false)是"永久改聊天文件"语义,不在世界书阶段跑,
+        // 这是酒馆 engine.js:354 的有意设计。
+        val worldInfoScript = buildScript(
+            findRegex = "/foo/",
+            replaceString = "bar",
+            placement = listOf(RegexPlacement.WORLD_INFO.value),
+            promptOnly = true,
+        )
+        val aiOutputScript = buildScript(
+            findRegex = "/foo/",
+            replaceString = "BAZ",
+            placement = listOf(RegexPlacement.AI_OUTPUT.value),
+            promptOnly = true,
+        )
+        val out = engine.getRegexedString(
+            raw = "foo",
+            placement = RegexPlacement.WORLD_INFO,
+            globalScripts = listOf(aiOutputScript, worldInfoScript),
+            isPrompt = true,
+        )
+        assertEquals("bar", out)
+    }
+
+    @Test
+    fun reasoningPlacementRunsOnlyReasoningScripts() {
+        // 对齐酒馆 reasoning.js:409 调用语义:REASONING 阶段不传 isPrompt/isMarkdown(改聊天文件场景),
+        // 因此默认脚本(markdownOnly=false && promptOnly=false)会跑。
+        val reasoningScript = buildScript(
+            findRegex = "/think/",
+            replaceString = "[hidden]",
+            placement = listOf(RegexPlacement.REASONING.value),
+        )
+        val aiOutputScript = buildScript(
+            findRegex = "/think/",
+            replaceString = "ANSWER",
+            placement = listOf(RegexPlacement.AI_OUTPUT.value),
+        )
+        val out = engine.getRegexedString(
+            raw = "let me think",
+            placement = RegexPlacement.REASONING,
+            globalScripts = listOf(aiOutputScript, reasoningScript),
+        )
+        assertEquals("let me [hidden]", out)
+    }
+
+    @Test
+    fun worldInfoPlacementCanReturnEmptyString() {
+        // 酒馆 world-info.js:5088 行为:正则把 entry.content 替换成空 → skip。
+        // RegexEngine 自身只负责返回空串,skip 由 LorebookEngine 调用方处理(单测覆盖在 LorebookEngineTest)。
+        val script = buildScript(
+            findRegex = "/.*/",
+            replaceString = "",
+            placement = listOf(RegexPlacement.WORLD_INFO.value),
+            promptOnly = true,
+        )
+        val out = engine.getRegexedString(
+            raw = "secret entry content",
+            placement = RegexPlacement.WORLD_INFO,
+            globalScripts = listOf(script),
+            isPrompt = true,
+        )
+        assertEquals("", out)
+    }
+
+    @Test
+    fun worldInfoDefaultScriptDoesNotRunInPromptPhase() {
+        // 对齐酒馆 engine.js:354:默认脚本(markdownOnly=false && promptOnly=false)
+        // 在 isPrompt=true 阶段不跑(WI 调用阶段),避免重复改写已写入聊天文件的内容。
+        val script = buildScript(
+            findRegex = "/foo/",
+            replaceString = "bar",
+            placement = listOf(RegexPlacement.WORLD_INFO.value),
+            // markdownOnly=false, promptOnly=false (默认值)
+        )
+        val out = engine.getRegexedString(
+            raw = "foo",
+            placement = RegexPlacement.WORLD_INFO,
+            globalScripts = listOf(script),
+            isPrompt = true,
+        )
+        assertEquals("foo", out)
+    }
+
+    @Test
     fun disabledScriptIsSkipped() {
         val script = buildScript(
             findRegex = "/foo/",

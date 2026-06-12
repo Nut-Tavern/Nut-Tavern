@@ -10,6 +10,7 @@ import com.nuttavern.data.lorebook.WiRole
 import com.nuttavern.prompt.TokenCounter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
@@ -51,6 +52,22 @@ class LorebookEngine @Inject constructor(
         val maxContextTokens: Int = 4096,
     )
 
+    /**
+     * 执行世界书激活。
+     *
+     * @param contentRegexHook 对每个被激活 entry 的 content 跑一次 WORLD_INFO placement 正则。
+     *   对齐酒馆 `world-info.js:5085-5086`:只对 entry.content 跑,不对 comment / wiFormat 包装跑;
+     *   返回空字符串则跳过该 entry(对齐 5088 行 `if (!content) return`)。默认 identity(不变换)。
+     *
+     *   **hook 调用契约**(必须满足,否则世界书正则行为偏离酒馆):
+     *   - 调用方需以 `isPrompt=true` 调 RegexEngine.getRegexedString(对齐 5086 行
+     *     `{ isMarkdown: false, isPrompt: true }`),否则默认脚本会错误介入世界书阶段;
+     *   - 调用方需按 entry.position 计算 regexDepth:`position == AT_DEPTH ? entry.depth : null`
+     *     (对齐 5085 行),否则带 minDepth/maxDepth 限定的脚本无法按 entry.depth 过滤;
+     *   - hook 抛异常时引擎自身会兜原文继续(见下方实现),保证单 entry 异常不打断整次激活。
+     *
+     *   钩子在 selectEntriesWithinBudget 之前一次性预跑,保证预算 token 计算与最终注入用同一份内容。
+     */
     fun activate(
         messages: List<String>,
         messageNames: List<String> = emptyList(),
@@ -60,6 +77,7 @@ class LorebookEngine @Inject constructor(
         messageCount: Int = messages.size,
         timedEffects: LorebookTimedEffectState = LorebookTimedEffectState.Empty,
         isDryRun: Boolean = false,
+        contentRegexHook: (entryContent: String, regexDepth: Int?) -> String = { content, _ -> content },
     ): ActivationResult {
         val strategy = lorebooks.firstOrNull()?.book?.characterStrategy ?: WiCharacterStrategy.CHARACTER_FIRST
         val candidates = buildCandidatesByStrategy(lorebooks, strategy)
@@ -108,7 +126,27 @@ class LorebookEngine @Inject constructor(
         )
 
         val sorted = afterGrouping.sortedByDescending { it.entry.order }
-        val withinBudget = selectEntriesWithinBudget(sorted, lorebooks, scanContext, wiFormat)
+        // 对齐酒馆 world-info.js:5085-5086:对 entry.content 跑 WORLD_INFO 正则;
+        // regexDepth 仅在 entry.position == AT_DEPTH 时取 entry.depth,其余位置取 null。
+        // hook 抛异常时兜原文继续,保证单 entry 异常不打断整次激活(对齐酒馆 forEach 的健壮性,
+        // engine.js 单脚本异常不冒泡);CancellationException 必须透传,避免破坏协程结构性并发。
+        val processedContents: Map<Int, String> = sorted.associate { candidate ->
+            val regexDepth = if (candidate.entry.position == WiPosition.AT_DEPTH) candidate.entry.depth else null
+            val processed = try {
+                contentRegexHook(candidate.entry.content, regexDepth)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (hookError: Throwable) {
+                // 不调 android.util.Log:它在 unit test 里默认 throw(参考 PlaceholderResolver.kt:60-66 同款约定),
+                // 会让"hook 异常兜底"测试本身崩在 Log 上。改写 stderr 保留 entry uid + 异常 message 便于排查。
+                System.err.println(
+                    "LorebookEngine: contentRegexHook threw, fallback to raw content (uid=${candidate.entry.uid}): ${hookError.message}",
+                )
+                candidate.entry.content
+            }
+            candidate.entryHash to processed
+        }
+        val withinBudget = selectEntriesWithinBudget(sorted, lorebooks, scanContext, wiFormat, processedContents)
         val nextTimedEffects = if (isDryRun) {
             activeTimedEffects.nextState
         } else {
@@ -120,6 +158,7 @@ class LorebookEngine @Inject constructor(
             wiFormat = wiFormat,
             overflowed = withinBudget.overflowed,
             nextTimedEffects = nextTimedEffects,
+            processedContents = processedContents,
         )
     }
 
@@ -594,6 +633,7 @@ class LorebookEngine @Inject constructor(
         lorebooks: List<TaggedLorebook>,
         scanContext: ScanContext,
         wiFormat: String,
+        processedContents: Map<Int, String>,
     ): BudgetSelection {
         val percentBudget = lorebooks.maxOf { book ->
             (book.book.tokenBudget * scanContext.maxContextTokens / 100).coerceAtLeast(1)
@@ -605,11 +645,16 @@ class LorebookEngine @Inject constructor(
         var overflowed = false
         val withinBudget = mutableListOf<CandidateEntry>()
         for (candidate in sorted) {
+            val processedContent = processedContents[candidate.entryHash] ?: candidate.entry.content
+            // 对齐酒馆 world-info.js:5086-5088:WORLD_INFO 正则把非空 entry.content 替换成空 → skip。
+            // 不在这里覆盖"entry.content 原本就空但 addMemo+comment 拼接出非空注入"的现有行为
+            // (后者是 LorebookEngine 与酒馆原版的另一处偏差,见 docs/modules/lorebook.md 已知坑)。
+            if (candidate.entry.content.isNotBlank() && processedContent.isBlank()) continue
             if (candidate.entry.ignoreBudget) {
                 withinBudget.add(candidate)
                 continue
             }
-            val tokens = tokenCounter.countTokens(formatContent(candidate.entry, wiFormat))
+            val tokens = tokenCounter.countTokens(formatContent(candidate.entry, wiFormat, processedContent))
             if (usedTokens + tokens <= effectiveBudget) {
                 usedTokens += tokens
                 withinBudget.add(candidate)
@@ -625,6 +670,7 @@ class LorebookEngine @Inject constructor(
         wiFormat: String,
         overflowed: Boolean,
         nextTimedEffects: LorebookTimedEffectState,
+        processedContents: Map<Int, String>,
     ): ActivationResult {
         val beforeEntries = mutableListOf<String>()
         val afterEntries = mutableListOf<String>()
@@ -634,7 +680,8 @@ class LorebookEngine @Inject constructor(
 
         for (candidate in sorted) {
             val entry = candidate.entry
-            val content = formatContent(entry, wiFormat)
+            val processedContent = processedContents[candidate.entryHash] ?: entry.content
+            val content = formatContent(entry, wiFormat, processedContent)
             if (content.isBlank()) continue
 
             when (entry.position) {
@@ -667,13 +714,19 @@ class LorebookEngine @Inject constructor(
         )
     }
 
-    private fun formatContent(entry: LorebookEntry, wiFormat: String): String {
+    /**
+     * 拼接 entry 的最终注入文本。
+     *
+     * @param entryContent entry.content 正则后的内容(对齐酒馆 world-info.js:5086 只对 content 跑 WORLD_INFO 正则,
+     *   不跑 comment / wiFormat)。无正则需求时传 entry.content 即可。
+     */
+    private fun formatContent(entry: LorebookEntry, wiFormat: String, entryContent: String): String {
         val raw = buildString {
             if (entry.addMemo && entry.comment.isNotBlank()) {
                 append(entry.comment)
                 append("\n")
             }
-            append(entry.content)
+            append(entryContent)
         }.trim()
 
         if (raw.isBlank()) return ""
