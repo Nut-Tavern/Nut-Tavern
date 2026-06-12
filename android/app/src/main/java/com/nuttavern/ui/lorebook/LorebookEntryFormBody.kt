@@ -345,6 +345,55 @@ private fun AdvancedSectionStateful(
                 checked = draft.addMemo,
                 onCheckedChange = { onDraftChange(draft.copy(addMemo = it)) },
             )
+            NutTavernGroupDivider()
+            // 以下 4 个为条目级覆写字段:留空 = 使用全局(书级)设置;显式设置 = 覆盖书级默认。
+            // 对齐酒馆 world-info.js (caseSensitive: 269 / scanDepth: 280 /
+            // matchWholeWords: 347 / useGroupScoring: 119) 的 `entry.xxx ?? world_info_xxx` 回落语义。
+            // 文案照抄酒馆 zh-cn.json (Scan Depth / Case-Sensitive / Whole Words / Group Scoring /
+            // Use global setting / Use global / Yes / No)。
+            NutTavernNumericField(
+                label = "扫描深度",
+                value = draft.entryScanDepth,
+                onValueChange = { onDraftChange(draft.copy(entryScanDepth = it)) },
+                parser = NumericParser.IntParser,
+                placeholder = "使用全局设置",
+                min = 0,
+                max = 1000,
+                nullable = true,
+            )
+            NutTavernGroupDivider()
+            NutTavernEnumRow<Boolean?>(
+                label = "区分大小写",
+                value = draft.entryCaseSensitive,
+                options = listOf(
+                    null to "使用全局",
+                    true to "是",
+                    false to "否",
+                ),
+                onSelect = { onDraftChange(draft.copy(entryCaseSensitive = it)) },
+            )
+            NutTavernGroupDivider()
+            NutTavernEnumRow<Boolean?>(
+                label = "完整单词",
+                value = draft.entryMatchWholeWords,
+                options = listOf(
+                    null to "使用全局",
+                    true to "是",
+                    false to "否",
+                ),
+                onSelect = { onDraftChange(draft.copy(entryMatchWholeWords = it)) },
+            )
+            NutTavernGroupDivider()
+            NutTavernEnumRow<Boolean?>(
+                label = "组评分",
+                value = draft.entryUseGroupScoring,
+                options = listOf(
+                    null to "使用全局",
+                    true to "是",
+                    false to "否",
+                ),
+                onSelect = { onDraftChange(draft.copy(entryUseGroupScoring = it)) },
+            )
         }
     }
 }
