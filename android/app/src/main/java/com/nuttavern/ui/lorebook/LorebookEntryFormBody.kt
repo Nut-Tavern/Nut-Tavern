@@ -115,8 +115,9 @@ fun LazyListScope.lorebookEntryFormItems(
                 options = listOf(
                     WiPosition.BEFORE to "角色描述之前",
                     WiPosition.AFTER to "角色描述之后",
-                    WiPosition.AN_TOP to "Author's Note 之前",
-                    WiPosition.AN_BOTTOM to "Author's Note 之后",
+                    // AN_TOP / AN_BOTTOM 不暴露:author's note 模块未落地,运行时被忽略
+                    // (见 AGENTS.md "Author's Note 模块未落地"待办)。导入的旧条目 position
+                    // 仍 round-trip 保留,但本仓库 UI 不再让用户主动选这两档。
                     WiPosition.AT_DEPTH to "按深度插入",
                     WiPosition.EM_TOP to "示例消息之前",
                     WiPosition.EM_BOTTOM to "示例消息之后",

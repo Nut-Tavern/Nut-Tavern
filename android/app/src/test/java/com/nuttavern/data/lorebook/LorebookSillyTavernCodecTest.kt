@@ -337,4 +337,55 @@ class LorebookSillyTavernCodecTest {
         val second = book.entries.first { it.uid == 1 }
         assertEquals(1, second.delayUntilRecursion)
     }
+
+    /**
+     * AN_TOP / AN_BOTTOM position 在导入导出 round-trip 中必须无损保留。
+     *
+     * 本仓库 author's note 模块未落地,LorebookEngine 运行时直接忽略这两档(见 AGENTS.md
+     * "Author's Note 模块未落地"待办),但 codec 必须保留 position 整数值,保证:
+     * 1. 用户从酒馆导入的世界书,带 AN_TOP/AN_BOTTOM 条目的 position 字段不会被改写或丢失;
+     * 2. 从本仓库导出回酒馆时,这些条目的 position 仍是原始值,酒馆侧仍能正确按 AN 槽注入。
+     *
+     * 这是"运行时忽略 ≠ 数据层降级"的边界保证。
+     */
+    @Test
+    fun roundTripPreservesAnTopAndAnBottomPosition() {
+        val world = """
+            {
+                "entries": {
+                    "0": {
+                        "uid": 0,
+                        "key": ["alpha"],
+                        "content": "an-top entry",
+                        "position": 2
+                    },
+                    "1": {
+                        "uid": 1,
+                        "key": ["beta"],
+                        "content": "an-bottom entry",
+                        "position": 3
+                    }
+                }
+            }
+        """.trimIndent()
+
+        val book = LorebookSillyTavernCodec.decodeFromSillyTavern(world, "AN Round Trip")
+
+        val anTop = book.entries.first { it.uid == 0 }
+        val anBottom = book.entries.first { it.uid == 1 }
+        assertEquals(WiPosition.AN_TOP, anTop.position)
+        assertEquals(WiPosition.AN_BOTTOM, anBottom.position)
+
+        val exported = LorebookSillyTavernCodec.encodeToSillyTavern(book)
+        val reparsed = Json.parseToJsonElement(exported).jsonObject
+        val entries = reparsed["entries"]!!.jsonObject
+        assertEquals(
+            WiPosition.AN_TOP,
+            (entries["0"]!!.jsonObject["position"] as JsonPrimitive).intOrNull,
+        )
+        assertEquals(
+            WiPosition.AN_BOTTOM,
+            (entries["1"]!!.jsonObject["position"] as JsonPrimitive).intOrNull,
+        )
+    }
 }

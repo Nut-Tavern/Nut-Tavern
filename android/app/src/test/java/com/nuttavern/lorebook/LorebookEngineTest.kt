@@ -456,4 +456,162 @@ class LorebookEngineTest {
         )
         assertEquals("memo-only", result.worldInfoBefore)
     }
+
+    // ─── AN_TOP / AN_BOTTOM 运行时忽略(author's note 模块未落地)─────────────────
+    // 见 AGENTS.md "Author's Note 模块未落地"待办。这两档 position 在酒馆原是
+    // "环绕 author's note 文本"的两个槽(world-info.js:5076-5152),本仓库 author's note
+    // 模块未落地,运行时直接忽略:不计预算、不拼输出、不进 activatedEntries。
+    // 数据层枚举常量保留,导入导出 round-trip 不丢字段(由 LorebookSillyTavernCodec 单测覆盖)。
+
+    @Test
+    fun anTopEntryIsIgnoredAtRuntime() {
+        val anTopEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "an-top-content",
+            position = WiPosition.AN_TOP,
+        )
+        val result = activate(anTopEntry, messages = listOf("alpha"), messageCount = 1)
+
+        // 5 个输出通道全空 + activatedEntries 全空,锁住"AN 条目运行时完全不存在"
+        assertEquals(emptyList<LorebookEntry>(), result.activatedEntries)
+        assertEquals("", result.worldInfoBefore)
+        assertEquals("", result.worldInfoAfter)
+        assertEquals(emptyList<LorebookEngine.DepthEntry>(), result.depthEntries)
+        assertEquals("", result.exampleTop)
+        assertEquals("", result.exampleBottom)
+        assertEquals(false, result.budgetOverflowed)
+    }
+
+    @Test
+    fun anBottomEntryIsIgnoredAtRuntime() {
+        val anBottomEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "an-bottom-content",
+            position = WiPosition.AN_BOTTOM,
+        )
+        val result = activate(anBottomEntry, messages = listOf("alpha"), messageCount = 1)
+
+        assertEquals(emptyList<LorebookEntry>(), result.activatedEntries)
+        assertEquals("", result.worldInfoBefore)
+        assertEquals("", result.worldInfoAfter)
+        assertEquals(emptyList<LorebookEngine.DepthEntry>(), result.depthEntries)
+        assertEquals("", result.exampleTop)
+        assertEquals("", result.exampleBottom)
+        assertEquals(false, result.budgetOverflowed)
+    }
+
+    @Test
+    fun anEntriesAreIgnoredButNormalEntriesStillRun() {
+        // 混合场景:AN_TOP/AN_BOTTOM 被跳过,BEFORE/AFTER 正常注入,
+        // 锁住"AN 过滤不影响其他 position"。
+        val beforeEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "before-content",
+            position = WiPosition.BEFORE,
+        )
+        val anTopEntry = LorebookEntry(
+            uid = 2,
+            key = listOf("alpha"),
+            content = "an-top-content",
+            position = WiPosition.AN_TOP,
+        )
+        val afterEntry = LorebookEntry(
+            uid = 3,
+            key = listOf("alpha"),
+            content = "after-content",
+            position = WiPosition.AFTER,
+        )
+        val anBottomEntry = LorebookEntry(
+            uid = 4,
+            key = listOf("alpha"),
+            content = "an-bottom-content",
+            position = WiPosition.AN_BOTTOM,
+        )
+        val result = activate(
+            entries = listOf(beforeEntry, anTopEntry, afterEntry, anBottomEntry),
+            messages = listOf("alpha"),
+            messageCount = 1,
+        )
+
+        // activatedEntries 不含 AN 条目;5 通道里只 worldInfoBefore/After 有值,其余空
+        assertEquals(listOf(beforeEntry, afterEntry), result.activatedEntries)
+        assertEquals("before-content", result.worldInfoBefore)
+        assertEquals("after-content", result.worldInfoAfter)
+        assertEquals(emptyList<LorebookEngine.DepthEntry>(), result.depthEntries)
+        assertEquals("", result.exampleTop)
+        assertEquals("", result.exampleBottom)
+    }
+
+    @Test
+    fun anConstantEntryIsIgnoredEvenWithoutKeyword() {
+        // constant=true 在酒馆里强制激活,无视关键词扫描。验证 AN 过滤优先级高于 constant:
+        // AN_TOP + constant=true 仍然被忽略,不应出现在任何输出通道。
+        val anConstantEntry = LorebookEntry(
+            uid = 1,
+            key = emptyList(),
+            content = "an-constant-content",
+            position = WiPosition.AN_TOP,
+            constant = true,
+        )
+        val result = activate(anConstantEntry, messages = listOf("无关消息"), messageCount = 1)
+
+        assertEquals(emptyList<LorebookEntry>(), result.activatedEntries)
+        assertEquals("", result.worldInfoBefore)
+        assertEquals("", result.worldInfoAfter)
+        assertEquals(emptyList<LorebookEngine.DepthEntry>(), result.depthEntries)
+    }
+
+    @Test
+    fun anIgnoreBudgetEntryDoesNotCountAgainstBudget() {
+        // ignoreBudget=true + AN_TOP:即便 ignoreBudget 让条目跳过预算限制,
+        // AN 条目仍应在候选入口被过滤,不应进入预算计算与输出。
+        val anIgnoreBudgetEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "an-ignore-budget-content".repeat(1000),
+            position = WiPosition.AN_BOTTOM,
+            ignoreBudget = true,
+        )
+        val result = activate(anIgnoreBudgetEntry, messages = listOf("alpha"), messageCount = 1)
+
+        assertEquals(emptyList<LorebookEntry>(), result.activatedEntries)
+        assertEquals("", result.worldInfoBefore)
+        assertEquals("", result.worldInfoAfter)
+        assertEquals(false, result.budgetOverflowed)
+    }
+
+    @Test
+    fun anEntryDoesNotCompeteInExclusionGroup() {
+        // A4 回归:AN_TOP 条目不得参与互斥组决议。
+        // 若 AN 条目以高 groupWeight 在组内胜出后又被剔除,会导致同组非 AN 条目被连带压制。
+        // 期望:AN 条目像不存在,BEFORE 条目正常注入。
+        val anHighWeightEntry = LorebookEntry(
+            uid = 1,
+            key = listOf("alpha"),
+            content = "an-high-weight",
+            position = WiPosition.AN_TOP,
+            group = "exclusive-group",
+            groupWeight = 999,
+        )
+        val beforeLowWeightEntry = LorebookEntry(
+            uid = 2,
+            key = listOf("alpha"),
+            content = "before-low-weight",
+            position = WiPosition.BEFORE,
+            group = "exclusive-group",
+            groupWeight = 100,
+        )
+        val result = activate(
+            entries = listOf(anHighWeightEntry, beforeLowWeightEntry),
+            messages = listOf("alpha"),
+            messageCount = 1,
+        )
+
+        // 若 AN 条目错误参与互斥组,worldInfoBefore 会是空字符串(BEFORE 被压制 + AN 被过滤)
+        assertEquals(listOf(beforeLowWeightEntry), result.activatedEntries)
+        assertEquals("before-low-weight", result.worldInfoBefore)
+    }
 }

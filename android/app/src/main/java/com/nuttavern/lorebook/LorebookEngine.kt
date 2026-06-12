@@ -166,13 +166,24 @@ class LorebookEngine @Inject constructor(
         lorebooks: List<TaggedLorebook>,
         strategy: Int,
     ): List<CandidateEntry> {
+        // AN_TOP / AN_BOTTOM 是酒馆"环绕 author's note 文本"的两档位置(world-info.js:5076-5152),
+        // 本仓库 author's note 模块未落地(见 AGENTS.md "Author's Note 模块未落地"待办),
+        // 这两档没有有效注入通道。在候选入口与 disable 一同过滤,运行时完全等价于"该条目不存在":
+        // - 不参与扫描 / 递归 / group 决议 / 时效状态 / 预算 / 输出注入;
+        // - 不进 activatedEntries;
+        // - 数据层枚举常量与 codec round-trip 完整保留,导入导出不丢字段。
+        // 过滤位置选这里(早于 resolveGroups)是为了避免 AN 条目以高 groupWeight 在互斥组中胜出后
+        // 又被剔除,导致同组非 AN 条目被连带压制(reviewer 双审计 R2 标记的潜在 bug)。
+        fun LorebookEntry.isRuntimeInjectable(): Boolean =
+            !disable && position != WiPosition.AN_TOP && position != WiPosition.AN_BOTTOM
+
         val characterCandidates = lorebooks
             .filter { it.isCharacterSource }
-            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { tagged.toCandidate(it) } }
+            .flatMap { tagged -> tagged.book.entries.filter { it.isRuntimeInjectable() }.map { tagged.toCandidate(it) } }
 
         val globalCandidates = lorebooks
             .filter { !it.isCharacterSource }
-            .flatMap { tagged -> tagged.book.entries.filter { !it.disable }.map { tagged.toCandidate(it) } }
+            .flatMap { tagged -> tagged.book.entries.filter { it.isRuntimeInjectable() }.map { tagged.toCandidate(it) } }
 
         return when (strategy) {
             WiCharacterStrategy.EVENLY -> (globalCandidates + characterCandidates).sortedByDescending { it.entry.order }
@@ -693,8 +704,9 @@ class LorebookEngine @Inject constructor(
                 }
                 WiPosition.EM_TOP -> emTopEntries.add(content)
                 WiPosition.EM_BOTTOM -> emBottomEntries.add(content)
-                WiPosition.AN_TOP -> beforeEntries.add(content)
-                WiPosition.AN_BOTTOM -> afterEntries.add(content)
+                // AN_TOP / AN_BOTTOM 已在 buildCandidatesByStrategy 入口被过滤,这里不会出现;
+                // 历史上曾被错误降级到 beforeEntries/afterEntries(污染 system 段),已删除。
+                // when (Int) 不强制穷尽,无需补 else。
             }
         }
 
