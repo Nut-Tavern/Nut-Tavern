@@ -16,6 +16,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationId = :conversationId ORDER BY createdAt DESC LIMIT :limit")
     suspend fun getRecentByConversationId(conversationId: String, limit: Int): List<MessageEntity>
 
+    @Query("SELECT * FROM messages WHERE id = :messageId")
+    suspend fun getById(messageId: String): MessageEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(message: MessageEntity)
 

@@ -46,4 +46,25 @@ object MessageSwipes {
             swipeIndex = targetIndex,
         )
     }
+
+    /**
+     * 删除当前选中的候选,并把 swipeIndex 顶上后一个(若已是末位则退到新末位)。
+     * 对齐酒馆 deleteSwipe(script.js:9279):splice 后 `newSwipeId = min(swipeId, swipes.length - 1)`。
+     *
+     * 仅在 [Message.swipes].size >= 2 时调用;调用方负责先判断 [Message.hasMultipleSwipes],
+     * size <= 1 应走"删整条消息"路径,而不是调本函数。这里传入不合法时返回原消息。
+     *
+     * @return 删除后的消息(parts 同步为新选中候选);若不满足前置条件返回原消息。
+     */
+    fun removeCurrentCandidate(message: Message): Message {
+        if (message.swipes.size <= 1) return message
+        val currentIndex = message.swipeIndex.coerceIn(0, message.swipes.lastIndex)
+        val nextSwipes = message.swipes.toMutableList().apply { removeAt(currentIndex) }
+        val nextIndex = minOf(currentIndex, nextSwipes.lastIndex)
+        return message.copy(
+            parts = nextSwipes[nextIndex],
+            swipes = nextSwipes,
+            swipeIndex = nextIndex,
+        )
+    }
 }

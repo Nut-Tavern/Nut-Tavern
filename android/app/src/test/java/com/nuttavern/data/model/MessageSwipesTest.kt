@@ -119,4 +119,83 @@ class MessageSwipesTest {
         )
         assertEquals(false, assistantMessage(parts = text("x")).hasMultipleSwipes)
     }
+
+    @Test
+    fun removeCurrentCandidate_middleIndex_promotesNext() {
+        // 删除中间索引,后一个顶上(索引不变,内容是原 swipes[2])。
+        val message = assistantMessage(
+            parts = text("B"),
+            swipes = listOf(text("A"), text("B"), text("C")),
+            swipeIndex = 1,
+        )
+
+        val result = MessageSwipes.removeCurrentCandidate(message)
+
+        assertEquals(listOf(text("A"), text("C")), result.swipes)
+        assertEquals(1, result.swipeIndex)
+        assertEquals(text("C"), result.parts)
+    }
+
+    @Test
+    fun removeCurrentCandidate_lastIndex_fallsBackToNewLast() {
+        // 删除末位,索引回退到新末位。
+        val message = assistantMessage(
+            parts = text("C"),
+            swipes = listOf(text("A"), text("B"), text("C")),
+            swipeIndex = 2,
+        )
+
+        val result = MessageSwipes.removeCurrentCandidate(message)
+
+        assertEquals(listOf(text("A"), text("B")), result.swipes)
+        assertEquals(1, result.swipeIndex)
+        assertEquals(text("B"), result.parts)
+    }
+
+    @Test
+    fun removeCurrentCandidate_firstIndex_promotesNext() {
+        // 删除首位,后一个顶上(索引保持 0,内容是原 swipes[1])。
+        val message = assistantMessage(
+            parts = text("A"),
+            swipes = listOf(text("A"), text("B"), text("C")),
+            swipeIndex = 0,
+        )
+
+        val result = MessageSwipes.removeCurrentCandidate(message)
+
+        assertEquals(listOf(text("B"), text("C")), result.swipes)
+        assertEquals(0, result.swipeIndex)
+        assertEquals(text("B"), result.parts)
+    }
+
+    @Test
+    fun removeCurrentCandidate_singleSwipe_returnsOriginal() {
+        // 单候选不能删 swipe(调用方应走删整条),本函数返回原消息。
+        val singleSwipe = assistantMessage(
+            parts = text("X"),
+            swipes = listOf(text("X")),
+            swipeIndex = 0,
+        )
+        assertSame(singleSwipe, MessageSwipes.removeCurrentCandidate(singleSwipe))
+
+        val noSwipes = assistantMessage(parts = text("X"))
+        assertSame(noSwipes, MessageSwipes.removeCurrentCandidate(noSwipes))
+    }
+
+    @Test
+    fun removeCurrentCandidate_outOfBoundsIndex_coercesToValid() {
+        // swipeIndex 越界时按 coerce 到合法区间处理,避免脏数据让函数崩溃。
+        val message = assistantMessage(
+            parts = text("B"),
+            swipes = listOf(text("A"), text("B")),
+            swipeIndex = 5,
+        )
+
+        val result = MessageSwipes.removeCurrentCandidate(message)
+
+        // 索引被 coerce 到 1(末位),删后退回 0。
+        assertEquals(listOf(text("A")), result.swipes)
+        assertEquals(0, result.swipeIndex)
+        assertEquals(text("A"), result.parts)
+    }
 }

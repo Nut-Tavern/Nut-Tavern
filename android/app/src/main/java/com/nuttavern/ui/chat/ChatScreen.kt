@@ -253,6 +253,7 @@ fun ChatScreen(
                             editContent = message.text
                         },
                         onRegenerateMessage = { message -> regenerateMessage.value = message },
+                        onGenerateNewSwipeMessage = viewModel::generateNewSwipe,
                         onSelectSwipe = viewModel::selectSwipe,
                         onDeleteMessage = { message -> pendingDeleteMessage.value = message },
                         onOpenModelPicker = { showModelPicker = true },
@@ -363,7 +364,13 @@ fun ChatScreen(
     RegenerateMessageDialog(
         message = regenerateMessage.value,
         onConfirm = { message ->
-            viewModel.regenerateFromMessage(message)
+            // 用户消息走"基于该消息追加 / 重生";末条 assistant 走破坏式删重。
+            // 中间 assistant 不会进入此对话框(MessageActionsSheet 不暴露重生入口)。
+            if (message.role == "user") {
+                viewModel.regenerateFromUserMessage(message)
+            } else {
+                viewModel.regenerateLastAssistantMessage(message)
+            }
             regenerateMessage.value = null
         },
         onDismiss = { regenerateMessage.value = null },
@@ -371,8 +378,8 @@ fun ChatScreen(
 
     DeleteMessageDialog(
         message = pendingDeleteMessage.value,
-        onConfirm = { message ->
-            viewModel.deleteMessage(message.id)
+        onConfirm = { message, deleteCurrentSwipeOnly ->
+            viewModel.deleteMessage(message.id, deleteCurrentSwipeOnly)
             pendingDeleteMessage.value = null
         },
         onDismiss = { pendingDeleteMessage.value = null },
@@ -469,6 +476,7 @@ private fun ChatScreenContent(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onGenerateNewSwipeMessage: (Message) -> Unit,
     onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     onOpenModelPicker: () -> Unit,
@@ -552,6 +560,7 @@ private fun ChatScreenContent(
             onCopyMessage = onCopyMessage,
             onEditMessage = onEditMessage,
             onRegenerateMessage = onRegenerateMessage,
+            onGenerateNewSwipeMessage = onGenerateNewSwipeMessage,
             onSelectSwipe = onSelectSwipe,
             onDeleteMessage = onDeleteMessage,
         )

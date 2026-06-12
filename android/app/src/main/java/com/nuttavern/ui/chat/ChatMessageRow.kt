@@ -57,6 +57,7 @@ import com.composables.icons.lucide.ChevronLeft
 import com.composables.icons.lucide.ChevronRight
 import com.composables.icons.lucide.Lucide
 import com.composables.icons.lucide.Pencil
+import com.composables.icons.lucide.Plus
 import com.composables.icons.lucide.RefreshCcw
 import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.X
@@ -78,6 +79,7 @@ internal fun ChatMessageRow(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onGenerateNewSwipeMessage: (Message) -> Unit,
     onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
 ) {
@@ -126,8 +128,12 @@ internal fun ChatMessageRow(
     if (actionsSheetVisible) {
         MessageActionsSheet(
             isUserMessage = isUserMessage,
-            // swipe 切换组:仅最后一条 assistant 消息且存在多个候选时展示。
-            showSwipeSwitcher = isLastAssistantMessage && !isUserMessage && message.hasMultipleSwipes,
+            isLastAssistantMessage = isLastAssistantMessage,
+            // swipe 切换组:任意 assistant 消息只要存在多个候选都展示(对齐酒馆 swipe-picker
+            // canOpenSwipePickerForMessage:不要求末条,只要 swipes>1 && 非 user)。这样中间消息
+            // (历史末条被继续聊后下沉、首条 alternateGreetings)的多 swipe 也能直接切换查看,
+            // 不会被 DeleteMessageDialog "保留 N 个候选可切换" 的文案承诺骗。
+            showSwipeSwitcher = !isUserMessage && message.hasMultipleSwipes,
             swipeIndex = message.swipeIndex,
             swipeCount = message.swipes.size,
             onSelectSwipe = { targetIndex -> onSelectSwipe(message.id, targetIndex) },
@@ -143,6 +149,10 @@ internal fun ChatMessageRow(
             onRegenerate = {
                 actionsSheetVisible = false
                 onRegenerateMessage(message)
+            },
+            onGenerateNewSwipe = {
+                actionsSheetVisible = false
+                onGenerateNewSwipeMessage(message)
             },
             onDelete = {
                 actionsSheetVisible = false
@@ -487,6 +497,7 @@ internal fun StreamingMessageRow(
 @Composable
 private fun MessageActionsSheet(
     isUserMessage: Boolean,
+    isLastAssistantMessage: Boolean,
     showSwipeSwitcher: Boolean,
     swipeIndex: Int,
     swipeCount: Int,
@@ -495,8 +506,16 @@ private fun MessageActionsSheet(
     onCopy: () -> Unit,
     onEdit: () -> Unit,
     onRegenerate: () -> Unit,
+    onGenerateNewSwipe: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    // 重生 / 生成新候选 / 删除三类操作的显隐与文案,对齐酒馆:
+    // - user 消息:仅"重新生成回复"(末条 user => 追加新 assistant;中间 user => 删后续重生);
+    // - 末条 assistant:同时给出"重新生成"(破坏式,删本条 + 重生)与"生成新候选"(swipe 追加);
+    // - 中间 assistant:不暴露任何重生入口(酒馆中间消息没有 regenerate 按钮)。
+    val showRegenerateRow = isUserMessage || isLastAssistantMessage
+    val showGenerateNewSwipeRow = !isUserMessage && isLastAssistantMessage
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         dragHandle = { BottomSheetDefaults.DragHandle() },
@@ -528,12 +547,22 @@ private fun MessageActionsSheet(
                     title = "编辑",
                     onClick = onEdit,
                 )
-                NutTavernGroupDivider()
-                NutTavernIconRow(
-                    icon = Lucide.RefreshCcw,
-                    title = if (isUserMessage) "重新生成回复" else "重新生成",
-                    onClick = onRegenerate,
-                )
+                if (showRegenerateRow) {
+                    NutTavernGroupDivider()
+                    NutTavernIconRow(
+                        icon = Lucide.RefreshCcw,
+                        title = if (isUserMessage) "重新生成回复" else "重新生成",
+                        onClick = onRegenerate,
+                    )
+                }
+                if (showGenerateNewSwipeRow) {
+                    NutTavernGroupDivider()
+                    NutTavernIconRow(
+                        icon = Lucide.Plus,
+                        title = "生成新候选",
+                        onClick = onGenerateNewSwipe,
+                    )
+                }
             }
             NutTavernGroupSection {
                 NutTavernIconRow(

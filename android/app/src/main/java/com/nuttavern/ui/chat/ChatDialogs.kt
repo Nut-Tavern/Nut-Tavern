@@ -41,15 +41,21 @@ internal fun RegenerateMessageDialog(
 ) {
     if (message == null) return
 
-    val description = if (message.role == "user") {
+    val isUserMessage = message.role == "user"
+    // 两种语义(中间 assistant 不再有重生入口,UI 层就不会传中间 assistant 进来):
+    //   1. 用户消息:基于这条消息追加新 assistant(对齐酒馆末条 user option_regenerate);
+    //      中间 user 会同时丢弃之后所有消息再重生(Nut Tavern 既有 user 重走语义)。
+    //   2. 末条 assistant:删除当前回复(含所有 swipes)并重生(对齐酒馆 option_regenerate)。
+    val title = if (isUserMessage) "重新生成回复" else "重新生成"
+    val description = if (isUserMessage) {
         "将丢弃这条消息之后的所有回复并重新生成。"
     } else {
-        "将丢弃当前这条回复并重新生成。"
+        "将删除当前回复并重新生成。原回复的所有候选会一起丢失。"
     }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("重新生成", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         text = {
             Text(
                 text = description,
@@ -68,22 +74,34 @@ internal fun RegenerateMessageDialog(
 @Composable
 internal fun DeleteMessageDialog(
     message: Message?,
-    onConfirm: (Message) -> Unit,
+    onConfirm: (Message, deleteCurrentSwipeOnly: Boolean) -> Unit,
     onDismiss: () -> Unit,
 ) {
     if (message == null) return
 
+    // 删除语义对齐酒馆 deleteSwipe(script.js:9279) + .mes_edit_delete(script.js:1656):
+    // - 多候选:只删当前选中的候选,本条消息保留(可撤回 = 切回其他候选);
+    // - 单候选 / 无候选:整条消息删除,前后拼接(不可撤回)。
+    val deleteCurrentSwipeOnly = message.hasMultipleSwipes
+    val title = if (deleteCurrentSwipeOnly) "删除当前候选" else "删除消息"
+    val description = if (deleteCurrentSwipeOnly) {
+        val remaining = message.swipes.size - 1
+        "将删除当前选中的候选,这条消息还会保留 $remaining 个候选可切换。"
+    } else {
+        "确定要删除这条消息吗？此操作不可撤销。"
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("删除消息", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
         text = {
             Text(
-                text = "确定要删除这条消息吗？此操作不可撤销。",
+                text = description,
                 style = MaterialTheme.typography.bodyMedium,
             )
         },
         confirmButton = {
-            TextButton(onClick = { onConfirm(message) }) {
+            TextButton(onClick = { onConfirm(message, deleteCurrentSwipeOnly) }) {
                 Text("删除", color = MaterialTheme.colorScheme.error)
             }
         },

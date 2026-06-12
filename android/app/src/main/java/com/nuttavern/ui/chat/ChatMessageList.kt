@@ -111,6 +111,7 @@ internal fun ChatMessageList(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onGenerateNewSwipeMessage: (Message) -> Unit,
     onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     modifier: Modifier = Modifier,
@@ -142,6 +143,7 @@ internal fun ChatMessageList(
             onCopyMessage = onCopyMessage,
             onEditMessage = onEditMessage,
             onRegenerateMessage = onRegenerateMessage,
+            onGenerateNewSwipeMessage = onGenerateNewSwipeMessage,
             onSelectSwipe = onSelectSwipe,
             onDeleteMessage = onDeleteMessage,
             modifier = modifier,
@@ -162,6 +164,7 @@ private fun ChatMessageListContent(
     onCopyMessage: (Message) -> Unit,
     onEditMessage: (Message) -> Unit,
     onRegenerateMessage: (Message) -> Unit,
+    onGenerateNewSwipeMessage: (Message) -> Unit,
     onSelectSwipe: (messageId: String, targetIndex: Int) -> Unit,
     onDeleteMessage: (Message) -> Unit,
     modifier: Modifier,
@@ -172,11 +175,10 @@ private fun ChatMessageListContent(
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
     val maxMessageWidth = (screenWidthDp * 0.78).dp
 
-    // swipe 切换只在**对话最末条且为 assistant**时展示(对齐酒馆 isMessageSwipeable:
-    // 仅 chat 最末楼层可 swipe)。末条是 user(已发未回复)时不展示。
-    val swipeableMessageId = messages.lastOrNull()
-        ?.takeIf { it.role == "assistant" }
-        ?.id
+    // 对话末条 assistant 的消息 id,用于判定"重新生成"与"生成新候选"按钮的显隐(仅末条 assistant 可走
+    // 重生/swipe 追加入口)。swipe 切换组独立判定:任意 assistant 消息只要有多候选都可以左右切换(对齐
+    // 酒馆 canOpenSwipePickerForMessage:不限制末条楼层)。
+    val swipeableMessageId = swipeableAssistantMessageId(messages)
 
     val totalItemCount = messages.size + if (shouldShowStreaming) 1 else 0
 
@@ -274,6 +276,7 @@ private fun ChatMessageListContent(
                     onCopyMessage = onCopyMessage,
                     onEditMessage = onEditMessage,
                     onRegenerateMessage = onRegenerateMessage,
+                    onGenerateNewSwipeMessage = onGenerateNewSwipeMessage,
                     onSelectSwipe = onSelectSwipe,
                     onDeleteMessage = onDeleteMessage,
                 )
@@ -365,3 +368,16 @@ private fun ImeLazyListAutoScroller(listState: LazyListState) {
         }
     }
 }
+
+/**
+ * 返回**对话最末条且为 assistant**的消息 id,否则返回 null。
+ *
+ * 判定单源:决定长按抽屉里"重新生成"与"生成新候选"按钮的显隐,以及 ChatViewModel 里
+ * regenerateLastAssistantMessage / generateNewSwipe 入口校验。**不**用于 swipe 切换组——
+ * swipe 切换组由 [com.nuttavern.data.model.Message.hasMultipleSwipes] 直接判定,对齐酒馆
+ * canOpenSwipePickerForMessage 不限制末条的语义。
+ *
+ * 对齐酒馆 isMessageSwipeable(script.js:9136):仅 chat.length - 1 楼层可走 swipe 追加。
+ */
+internal fun swipeableAssistantMessageId(messages: List<com.nuttavern.data.model.Message>): String? =
+    messages.lastOrNull()?.takeIf { it.role == "assistant" }?.id

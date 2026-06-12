@@ -51,6 +51,14 @@ class ConversationRepository @Inject constructor(
         messageDao.insert(message.toEntity(conversationId, createdAt))
     }
 
+    /**
+     * 按主键直读单条消息。供"生成新候选"流水线在落库前重查 target 用,避免使用上游捕获的
+     * 旧快照(流式期间用户若编辑同一条消息,parts/swipes 会被 editMessage 同步落库)。
+     */
+    suspend fun getMessageById(messageId: String): Message? {
+        return messageDao.getById(messageId)?.toMessage()
+    }
+
     suspend fun updateMessageParts(
         messageId: String,
         parts: List<MessagePart>,

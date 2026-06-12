@@ -1256,75 +1256,114 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun regenerateFromMessage(message: Message) {
+    /**
+     * 末条 user 上点"重新生成回复"——基于该 user 消息**追加新 assistant**(对齐酒馆
+     * option_regenerate 在末条 user 上的特殊路径,见 script.js:4346 "do nothing? why does
+     * this check exist?" 分支)。中间 user 消息也走这条路径:删除该 user 之后所有消息,
+     * 然后基于该 user 重生(本仓库既有的"基于 user 重走"语义,超出酒馆"仅末条 user"覆盖面,
+     * 由 RegenerateMessageDialog 二次确认承担破坏性提示)。
+     */
+    fun regenerateFromUserMessage(message: Message) {
         if (_isReplying.value) return
+        if (message.role != "user") return
 
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank()) return
 
-        if (message.role == "user") {
-            val trimmedText = message.text.trim()
-            if (trimmedText.isBlank()) return
+        val trimmedText = message.text.trim()
+        if (trimmedText.isBlank()) return
 
-            _isReplying.value = true
-
-            streamingJob = viewModelScope.launch {
-                try {
-                    streamAssistantReplyForConversation(conversationId) {
-                        conversationRepository.deleteMessagesAfter(conversationId, message.id)
-                        keepMessagesThrough(conversationId, message.id)
-                    }
-                } catch (e: CancellationException) {
-                    clearStreamingState(conversationId)
-                    _isReplying.value = false
-                } catch (e: Exception) {
-                    _errorMessage.value = "重新生成失败，请检查网络、提供商配置或模型名称"
-                    clearStreamingState(conversationId)
-                    _isReplying.value = false
-                }
+        launchRegenerationJob(
+            conversationId = conversationId,
+            errorMessage = "重新生成失败，请检查网络、提供商配置或模型名称",
+        ) {
+            streamAssistantReplyForConversation(conversationId) {
+                conversationRepository.deleteMessagesAfter(conversationId, message.id)
+                keepMessagesThrough(conversationId, message.id)
             }
-        } else {
-            val messages = _currentMessages.value
-            val precedingUserMessage = messages
-                .takeWhile { it.id != message.id }
-                .lastOrNull { it.role == "user" }
+        }
+    }
 
-            if (precedingUserMessage == null) {
-                _errorMessage.value = "无法重新生成：没有对应的用户消息"
-                return
+    /**
+     * 末条 assistant 上点"重新生成"——对齐酒馆 option_regenerate(script.js:4350
+     * `chat.length = chat.length - 1`):删除末条 assistant(含其全部 swipes)后重生,
+     * 新回复作为全新消息追加,swipes 从 0 重建。**破坏式**操作。
+     *
+     * 仅当目标是当前对话末条消息且为 assistant 时生效;否则忽略(UI 层不应给出该入口)。
+     */
+    fun regenerateLastAssistantMessage(message: Message) {
+        if (_isReplying.value) return
+        if (message.role != "assistant") return
+
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
+
+        val messages = _currentMessages.value
+        if (messages.lastOrNull()?.id != message.id) return
+
+        launchRegenerationJob(
+            conversationId = conversationId,
+            errorMessage = "重新生成失败，请检查网络、提供商配置或模型名称",
+        ) {
+            streamAssistantReplyForConversation(conversationId) {
+                conversationRepository.deleteMessagesFrom(conversationId, message.id)
+                keepMessagesBefore(conversationId, message.id)
             }
+        }
+    }
 
-            // 仅当目标是**对话最末条**且为 assistant 时做 swipe 并入(对齐酒馆 isMessageSwipeable:
-            // messageId == chat.length - 1)。若它后面还挂着未回复的 user 消息,重生会改变后续上下文,
-            // 必须走删后续重生而非 swipe,否则 prompt 会漏掉后续 user 消息、并产生悬空消息。
-            val isLastMessage = messages.lastOrNull()?.id == message.id
-            val swipeTarget = if (isLastMessage) message else null
+    /**
+     * 末条 assistant 上点"生成新候选"——对齐酒馆 swipe overswipe(script.js:10336-10357
+     * + saveReply type='swipe'):旧回复保留为已有候选,新回复追加到 swipes 末位并选中。
+     * **无损**操作,任何旧 swipe 都不丢。
+     *
+     * 仅当目标是当前对话末条消息且为 assistant 时生效。
+     */
+    fun generateNewSwipe(message: Message) {
+        if (_isReplying.value) return
+        if (message.role != "assistant") return
 
-            _isReplying.value = true
+        val conversationId = _currentConversationId.value
+        if (conversationId.isBlank()) return
 
-            streamingJob = viewModelScope.launch {
-                try {
-                    streamAssistantReplyForConversation(
-                        conversationId = conversationId,
-                        regenerateSwipeTarget = swipeTarget,
-                    ) {
-                        if (swipeTarget != null) {
-                            // swipe 并入:只把目标消息从内存历史移除(让 prompt 不带旧回复),**不删库**;
-                            // 落库走 mergeRegeneratedSwipe 更新同一条消息的候选,observeMessages 会把它带回。
-                            keepMessagesBefore(conversationId, message.id)
-                        } else {
-                            conversationRepository.deleteMessagesFrom(conversationId, message.id)
-                            keepMessagesBefore(conversationId, message.id)
-                        }
-                    }
-                } catch (e: CancellationException) {
-                    clearStreamingState(conversationId)
-                    _isReplying.value = false
-                } catch (e: Exception) {
-                    _errorMessage.value = "重新生成失败，请检查网络、提供商配置或模型名称"
-                    clearStreamingState(conversationId)
-                    _isReplying.value = false
-                }
+        val messages = _currentMessages.value
+        if (messages.lastOrNull()?.id != message.id) return
+
+        launchRegenerationJob(
+            conversationId = conversationId,
+            errorMessage = "生成失败，请检查网络、提供商配置或模型名称",
+        ) {
+            streamAssistantReplyForConversation(
+                conversationId = conversationId,
+                regenerateSwipeTarget = message,
+            ) {
+                // swipe 并入:只把目标消息从内存历史移除(让 prompt 不带旧回复),**不删库**;
+                // 落库走 mergeRegeneratedSwipe 更新同一条消息的候选,observeMessages 会把它带回。
+                keepMessagesBefore(conversationId, message.id)
+            }
+        }
+    }
+
+    /**
+     * 启动重生 / 生成新候选的 streamingJob 公共骨架:置位 _isReplying、捕获取消与异常、
+     * 失败时回写 _errorMessage 并清状态。具体的"删消息 / 调 stream / 落库"细节由 [block] 决定。
+     */
+    private fun launchRegenerationJob(
+        conversationId: String,
+        errorMessage: String,
+        block: suspend () -> Unit,
+    ) {
+        _isReplying.value = true
+        streamingJob = viewModelScope.launch {
+            try {
+                block()
+            } catch (e: CancellationException) {
+                clearStreamingState(conversationId)
+                _isReplying.value = false
+            } catch (e: Exception) {
+                _errorMessage.value = errorMessage
+                clearStreamingState(conversationId)
+                _isReplying.value = false
             }
         }
     }
@@ -1372,9 +1411,38 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    fun deleteMessage(messageId: String) {
+    /**
+     * 删除消息。语义分两种(由调用方通过 [deleteCurrentSwipeOnly] 显式选择,UI 文案与之绑定):
+     *
+     * - [deleteCurrentSwipeOnly] = true 且消息有多候选:只删当前选中的候选(swipes splice + 顺位
+     *   到后一个),对齐酒馆 deleteSwipe(script.js:9279)。本条消息保留。
+     * - [deleteCurrentSwipeOnly] = false 或消息只有 0/1 个候选:整条删除(splice + 前后拼接),
+     *   含该消息的全部 swipes,对齐酒馆 .mes_edit_delete 走 `chat.splice(id, 1)`(script.js:1656)。
+     *
+     * UI 层负责按 [Message.hasMultipleSwipes] 选择对应文案与参数,本函数按入参执行。
+     */
+    fun deleteMessage(messageId: String, deleteCurrentSwipeOnly: Boolean) {
         val conversationId = _currentConversationId.value
         if (conversationId.isBlank() || messageId.isBlank()) return
+
+        val target = _messagesByConversationId.value[conversationId].orEmpty()
+            .firstOrNull { it.id == messageId } ?: return
+
+        // 只有多候选才能"只删候选";单候选/无候选退化为整条删除。
+        if (deleteCurrentSwipeOnly && target.hasMultipleSwipes) {
+            val updated = MessageSwipes.removeCurrentCandidate(target)
+            if (updated === target) return
+            viewModelScope.launch {
+                conversationRepository.updateMessageSwipes(
+                    messageId = updated.id,
+                    selectedParts = updated.parts,
+                    swipes = updated.swipes,
+                    swipeIndex = updated.swipeIndex,
+                )
+                updateMessageInMemory(conversationId, updated)
+            }
+            return
+        }
 
         viewModelScope.launch {
             conversationRepository.deleteMessage(messageId)
@@ -1673,17 +1741,22 @@ class ChatViewModel @Inject constructor(
     /**
      * 把重新生成的回复并入目标消息的 swipe 候选:旧版本保留为已有候选,新回复追加并选中。
      *
-     * 落库走 updateMessageSwipes 更新同一条消息。注意:并入前 beforeBuildMessages 已用
-     * keepMessagesBefore 把目标消息移出内存历史,所以这里的 updateMessageInMemory 在并入路径上
-     * 通常是 no-op(内存里已无同 id 消息);内存最终由 observeMessages 的 DB Flow emit 带回(含新候选)。
-     * 保留这次调用是为了在 Flow 尚未 emit 的极短窗口里尽量贴近最终态,不依赖它做正确性兜底。
+     * 落库前必须从 DB 重查 target,而不是直接使用上游传入的 [targetSnapshot]:流式期间用户若编辑
+     * 同一条消息,editMessage 会同步把新 parts/swipes 落库;若用旧快照拼装会把用户编辑静默吞掉。
+     * 若重查时目标已被删除(并发删消息),静默放弃这次并入(用户已表达不要这条消息的意图)。
+     *
+     * 注意:并入前 beforeBuildMessages 已用 keepMessagesBefore 把目标消息移出内存历史,所以这里的
+     * updateMessageInMemory 在并入路径上通常是 no-op(内存里已无同 id 消息);内存最终由
+     * observeMessages 的 DB Flow emit 带回(含新候选)。保留这次调用是为了在 Flow 尚未 emit 的极短
+     * 窗口里尽量贴近最终态,不依赖它做正确性兜底。
      */
     private suspend fun mergeRegeneratedSwipe(
         conversationId: String,
-        target: Message,
+        targetSnapshot: Message,
         newParts: List<MessagePart>,
     ) {
-        val merged = MessageSwipes.appendRegeneratedCandidate(target, newParts)
+        val freshTarget = conversationRepository.getMessageById(targetSnapshot.id) ?: return
+        val merged = MessageSwipes.appendRegeneratedCandidate(freshTarget, newParts)
         conversationRepository.updateMessageSwipes(
             messageId = merged.id,
             selectedParts = merged.parts,
