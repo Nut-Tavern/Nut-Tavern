@@ -70,7 +70,9 @@ class GeneratedContentSanitizerTest {
     @Test
     fun generatedDisplayText_treatsLiteralNullAsEmpty() {
         // 字面 null 的处理应该和 sanitizeProviderTextField 对齐,生成端也可能吐 "null"。
+        // 三种形态(精确小写 / 大小写不敏感 / 带 padding)都要清空,锁住 isMeaninglessNullText 复用。
         assertEquals("", GeneratedContentSanitizer.sanitizeGeneratedDisplayText("null"))
+        assertEquals("", GeneratedContentSanitizer.sanitizeGeneratedDisplayText("NULL"))
         assertEquals("", GeneratedContentSanitizer.sanitizeGeneratedDisplayText("  NULL  "))
     }
 
@@ -131,5 +133,34 @@ class GeneratedContentSanitizerTest {
         )
         assertEquals("answer", result.answerContent)
         assertEquals("upper case", result.reasoningContent)
+    }
+
+    @Test
+    fun splitReasoning_supportsMultilineThinkBlock() {
+        // 锁住正则 `[\s\S]*?` 的跨行能力。如果有人把 `[\s\S]` 改成 `.`(默认不跨行),
+        // 单块多行 reasoning 就会捕获失败,这是隐藏回归点。
+        val result = GeneratedContentSanitizer.splitReasoningFromAnswer(
+            "<think>line1\nline2\nline3</think>answer",
+        )
+        assertEquals("answer", result.answerContent)
+        assertEquals("line1\nline2\nline3", result.reasoningContent)
+    }
+
+    @Test
+    fun splitReasoning_stripsOrphanClosingTagWhenAlsoMatchingFullBlock() {
+        // 流式跨帧拼接边界场景:某帧只收到 `</think>` 残留(前面 `<think>` 在更早帧已被
+        // 完整 think 块吃掉)。函数内 `replace(closingThinkTagRegex, "")` 这条 line 35
+        // 兜底就是为这种残留服务。完整 think 块走 reasoningMatches 路径时,answer 段必须
+        // 把残留 `</think>` 一起清掉,否则会污染答案显示。
+        //
+        // 注意:本测试触发的是"已有完整 think 块匹配 + 答案段还混了一个孤立 </think>"
+        // 的场景。被测代码在 `reasoningMatches.isEmpty()` 时早返回,不走 closingThinkTag
+        // 清洗,所以单纯 `"</think>answer"` 输入会保留 `</think>` 残留——那是有意的早返回
+        // 行为,不在本测试断言范围内。
+        val result = GeneratedContentSanitizer.splitReasoningFromAnswer(
+            "<think>r</think>part1</think>part2",
+        )
+        assertEquals("part1part2", result.answerContent)
+        assertEquals("r", result.reasoningContent)
     }
 }
