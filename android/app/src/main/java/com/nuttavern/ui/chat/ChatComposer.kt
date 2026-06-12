@@ -1,5 +1,6 @@
 package com.nuttavern.ui.chat
 
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -38,6 +39,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,10 +63,15 @@ import com.composables.icons.lucide.Maximize2
 import com.composables.icons.lucide.Paperclip
 import com.composables.icons.lucide.Send
 import com.composables.icons.lucide.X
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.nuttavern.data.model.EffortTier
+import com.nuttavern.data.model.FileAttachment
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Provider
 import com.nuttavern.data.model.ThinkingLevel
+import com.nuttavern.ui.components.FileAttachmentPill
 import com.nuttavern.ui.components.NutTavernAlphaTokens
 import com.nuttavern.ui.components.NutTavernComposerTokens
 import com.nuttavern.ui.components.NutTavernGroupDivider
@@ -90,9 +97,12 @@ fun ChatComposer(
     currentModelName: String,
     currentThinkingLevel: ThinkingLevel,
     pendingAttachments: List<ImageAttachment>,
+    pendingFileAttachments: List<FileAttachment>,
     imageInputSupported: Boolean,
     onAddImage: (ByteArray, String) -> Unit,
+    onAddFile: (ByteArray, String?, String) -> Unit,
     onRemoveImage: (String) -> Unit,
+    onRemoveFile: (String) -> Unit,
     onOpenModelPicker: () -> Unit,
     onDraftChange: (String) -> Unit,
     onSendDraft: (String) -> Unit,
@@ -104,17 +114,68 @@ fun ChatComposer(
     var activeSheet by remember { mutableStateOf<ComposerSheet?>(null) }
 
     val context = LocalContext.current
+    // pickerScope 名称强调"图片/文件 picker 回调用的协程作用域";
+    // 它由 rememberCoroutineScope() 返回,默认绑定 Composition(Main 线程),
+    // 真正的 IO 切换由内部的 withContext(Dispatchers.IO) 显式完成。
+    val pickerScope = rememberCoroutineScope()
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia(),
     ) { uri ->
         if (uri != null) {
             val resolver = context.contentResolver
             val mime = resolver.getType(uri) ?: "image/jpeg"
-            // 读 URI 字节在主线程做一次性小 IO;大图上限由 ViewModel 校验拒绝。
-            val bytes = runCatching {
-                resolver.openInputStream(uri)?.use { it.readBytes() }
-            }.getOrNull()
-            if (bytes != null) onAddImage(bytes, mime)
+            // 读 URI 字节走 IO 协程,避免主线程阻塞;大图上限由 ViewModel 校验拒绝。
+            pickerScope.launch {
+                val bytes = withContext(Dispatchers.IO) {
+                    runCatching {
+                        resolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                }
+                if (bytes != null) {
+                    onAddImage(bytes, mime)
+                } else {
+                    Toast.makeText(context, "读取图片失败", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+    // 文件选择走 OpenDocument(SAF):比 GetContent 更稳定地拿到原始文件名(DISPLAY_NAME)。
+    // MIME 数组限定纯文本类型,系统选择器会自动过滤。最终白名单 + BOM 检测在 ViewModel 兜底,
+    // 这里只是第一道粗筛。
+    //
+    // 读盘走 IO 协程:大文本(几十 MB)在主线程 readBytes() 会触发 ANR;失败也必须给反馈,
+    // 不允许出现"用户点了文件什么都没发生"的静默失败(rikkahub 的坑,我们不沿用)。
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            val resolver = context.contentResolver
+            val rawMime = resolver.getType(uri)
+            pickerScope.launch {
+                val readResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val displayName = resolver.query(
+                            uri,
+                            arrayOf(android.provider.OpenableColumns.DISPLAY_NAME),
+                            null,
+                            null,
+                            null,
+                        )?.use { cursor ->
+                            if (cursor.moveToFirst()) cursor.getString(0) else null
+                        }
+                        val fileName = displayName ?: uri.lastPathSegment ?: "file"
+                        val bytes = resolver.openInputStream(uri)?.use { it.readBytes() }
+                            ?: error("openInputStream returned null")
+                        fileName to bytes
+                    }
+                }
+                readResult.fold(
+                    onSuccess = { (fileName, bytes) -> onAddFile(bytes, rawMime, fileName) },
+                    onFailure = {
+                        Toast.makeText(context, "读取文件失败", Toast.LENGTH_SHORT).show()
+                    },
+                )
+            }
         }
     }
 
@@ -145,10 +206,12 @@ fun ChatComposer(
                     .padding(8.dp),
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
-                if (pendingAttachments.isNotEmpty()) {
+                if (pendingAttachments.isNotEmpty() || pendingFileAttachments.isNotEmpty()) {
                     PendingAttachmentStrip(
                         attachments = pendingAttachments,
-                        onRemove = onRemoveImage,
+                        fileAttachments = pendingFileAttachments,
+                        onRemoveImage = onRemoveImage,
+                        onRemoveFile = onRemoveFile,
                     )
                 }
 
@@ -162,7 +225,7 @@ fun ChatComposer(
                     currentProvider = currentProvider,
                     modelName = currentModelName,
                     isReplying = isReplying,
-                    canSend = draft.isNotBlank() || pendingAttachments.isNotEmpty(),
+                    canSend = draft.isNotBlank() || pendingAttachments.isNotEmpty() || pendingFileAttachments.isNotEmpty(),
                     onOpenAttachmentSheet = { activeSheet = ComposerSheet.Attachments },
                     onOpenModelPicker = onOpenModelPicker,
                     onOpenThinkingSheet = { activeSheet = ComposerSheet.Thinking },
@@ -180,6 +243,20 @@ fun ChatComposer(
                 activeSheet = null
                 imagePicker.launch(
                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                )
+            },
+            onPickFile = {
+                activeSheet = null
+                // OpenDocument MIME 白名单粗筛:覆盖纯文本族 + 常见结构化文本。
+                // 设备厂商对 application/x-yaml / application/toml 支持参差,所以也带 text/* 兜底。
+                filePicker.launch(
+                    arrayOf(
+                        "text/*",
+                        "application/json",
+                        "application/xml",
+                        "application/x-yaml",
+                        "application/toml",
+                    )
                 )
             },
             onDismiss = { activeSheet = null },
@@ -345,6 +422,7 @@ private fun ChatComposerToolbar(
 private fun AttachmentImportSheet(
     imageInputSupported: Boolean,
     onPickImage: () -> Unit,
+    onPickFile: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     ModalBottomSheet(
@@ -360,9 +438,9 @@ private fun AttachmentImportSheet(
             NutTavernSheetTitle(
                 title = "附件导入",
                 description = if (imageInputSupported) {
-                    "选择照片发送给支持图片输入的模型。拍照与文件上传暂未接入。"
+                    "选择照片或上传文本文件。拍照暂未接入。"
                 } else {
-                    "当前模型不支持图片输入。拍照与文件上传暂未接入。"
+                    "当前模型不支持图片输入。可上传文本文件。拍照暂未接入。"
                 },
             )
             // 横向 3 等分 Tile,与 IconRow 形态不同,保留自写。
@@ -379,7 +457,13 @@ private fun AttachmentImportSheet(
                     onClick = onPickImage,
                     modifier = Modifier.weight(1f),
                 )
-                DisabledAttachmentTile("上传文件", Lucide.FileUp, Modifier.weight(1f))
+                AttachmentTile(
+                    title = "上传文件",
+                    icon = Lucide.FileUp,
+                    enabled = true,
+                    onClick = onPickFile,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -447,11 +531,16 @@ private fun DisabledAttachmentTile(
     }
 }
 
-/** Composer 顶部待发图片预览条:横向缩略图 + 右上角删除按钮。 */
+/**
+ * Composer 顶部待发附件预览条:横向滚动,图片缩略图和文件药丸混排。
+ * 顺序:先图片(原定行为),后文件;两类各自原始尺寸,不做统一缩放。
+ */
 @Composable
 private fun PendingAttachmentStrip(
     attachments: List<ImageAttachment>,
-    onRemove: (String) -> Unit,
+    fileAttachments: List<FileAttachment>,
+    onRemoveImage: (String) -> Unit,
+    onRemoveFile: (String) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -459,6 +548,7 @@ private fun PendingAttachmentStrip(
             .horizontalScroll(rememberScrollState())
             .padding(horizontal = 4.dp, vertical = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
         attachments.forEach { attachment ->
             Box(modifier = Modifier.size(64.dp)) {
@@ -471,7 +561,7 @@ private fun PendingAttachmentStrip(
                         .clip(RoundedCornerShape(NutTavernShapeTokens.AttachmentTile)),
                 )
                 Surface(
-                    onClick = { onRemove(attachment.id) },
+                    onClick = { onRemoveImage(attachment.id) },
                     shape = CircleShape,
                     color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                     contentColor = MaterialTheme.colorScheme.onSurface,
@@ -487,6 +577,12 @@ private fun PendingAttachmentStrip(
                     )
                 }
             }
+        }
+        fileAttachments.forEach { file ->
+            FileAttachmentPill(
+                fileName = file.fileName,
+                onRemove = { onRemoveFile(file.id) },
+            )
         }
     }
 }

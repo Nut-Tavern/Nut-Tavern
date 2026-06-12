@@ -67,6 +67,14 @@ data class Message(
      */
     val attachments: List<ImageAttachment> = emptyList(),
     /**
+     * 用户随消息发送的文本文件附件。空 = 没有文件附件。
+     *
+     * 二进制落 [filesDir],这里只引用路径。文件文本**不进** [parts]——`parts.text` 永远是
+     * 用户输入纯文本;文件内容只在发送时由 [com.nuttavern.data.files.FileAttachmentPromptBuilder]
+     * 临时读盘 + XML 标签包装拼到 user message 文本前,**发完即丢**,不污染历史。
+     */
+    val fileAttachments: List<FileAttachment> = emptyList(),
+    /**
      * swipe 候选列表:每个元素是一个完整候选的 parts。空 = 只有一个版本(不展示切换)。
      * 对齐酒馆 `swipes`;非空时 [swipeIndex] 处候选与 [parts] 内容一致。
      */
@@ -99,6 +107,28 @@ data class ImageAttachment(
     val path: String,
     /** MIME 类型,如 `image/jpeg` / `image/png` / `image/webp`。发请求时各家要用。 */
     val mimeType: String,
+)
+
+/**
+ * 一份随消息发送的文本文件附件。
+ *
+ * 二进制**不进数据库**:文件落 `filesDir/chat-files/{id}.{ext}`,这里只存元数据。
+ * 发请求时由 [com.nuttavern.data.files.FileAttachmentPromptBuilder] 读盘 → XML 包装 →
+ * 拼到 user message 文本前;文件内容**不**落入 [Message.parts]。
+ *
+ * **不持有大小字段**:UI 不显示大小,项目也不主动设上限(用户决策);极端大文件读盘 OOM
+ * 由 [FileAttachmentPromptBuilder] 兜底转 `FileAttachmentReadException` 优雅失败。
+ */
+@kotlinx.serialization.Serializable
+data class FileAttachment(
+    /** 附件唯一 id,同时用作落盘文件名(不含扩展名)。 */
+    val id: String,
+    /** 文本文件绝对路径(`filesDir/chat-files/{id}.{ext}`)。 */
+    val path: String,
+    /** MIME 类型,如 `text/plain` / `application/json` / `text/markdown`。 */
+    val mimeType: String,
+    /** 原始显示名(含扩展名),UI 药丸渲染用。 */
+    val fileName: String,
 )
 
 

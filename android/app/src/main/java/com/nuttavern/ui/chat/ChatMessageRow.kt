@@ -1,11 +1,17 @@
 package com.nuttavern.ui.chat
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,12 +51,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.composables.icons.lucide.Copy
 import com.composables.icons.lucide.ChevronLeft
@@ -62,9 +70,11 @@ import com.composables.icons.lucide.RefreshCcw
 import com.composables.icons.lucide.Trash2
 import com.composables.icons.lucide.X
 import com.nuttavern.data.model.GeneratedContentSanitizer
+import com.nuttavern.data.model.FileAttachment
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.data.model.MessagePart
+import com.nuttavern.ui.components.FileAttachmentPill
 import com.nuttavern.ui.components.NutTavernGroupDivider
 import com.nuttavern.ui.components.NutTavernGroupSection
 import com.nuttavern.ui.components.NutTavernGroupTokens
@@ -197,9 +207,20 @@ private fun UserMessageContent(
             }
         }
     }
+    // 文件附件药丸:位于气泡和图片附件之间,与气泡同侧对齐。点击触发系统 ACTION_VIEW。
+    if (message.fileAttachments.isNotEmpty()) {
+        if (visibleContent.isNotBlank()) {
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        MessageFileAttachments(
+            fileAttachments = message.fileAttachments,
+            maxMessageWidth = maxMessageWidth,
+            alignment = alignment,
+        )
+    }
     // 附件图片放在文字下方,与气泡同侧对齐。点击可全屏放大查看。
     if (message.attachments.isNotEmpty()) {
-        if (visibleContent.isNotBlank()) {
+        if (visibleContent.isNotBlank() || message.fileAttachments.isNotEmpty()) {
             Spacer(modifier = Modifier.height(4.dp))
         }
         MessageAttachmentImages(
@@ -275,6 +296,97 @@ private fun TimelineBlock(
                 )
             }
         }
+    }
+}
+
+/**
+ * 消息内文件附件:横向 [FlowRow] 自适应换行,与气泡同侧对齐。
+ * 点击药丸触发 [openFileWithSystemViewer],由系统选择文本编辑器打开。
+ *
+ * 使用 [FlowRow] 而非 [Row]:文件名长度差异大,单行 Row 会被气泡最大宽度截断;FlowRow 在
+ * 单行容不下时自动换到下一行,每个药丸都按内容宽度展示(单行 ellipsis 兜底极长名称)。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun MessageFileAttachments(
+    fileAttachments: List<FileAttachment>,
+    maxMessageWidth: Dp,
+    alignment: Alignment,
+) {
+    val context = LocalContext.current
+    Box(
+        modifier = Modifier.fillMaxWidth(),
+        contentAlignment = alignment,
+    ) {
+        // user 侧气泡靠右,药丸排列也要从右起;assistant 侧靠左,默认 spacedBy 即可。
+        // 这里 alignment 由父级传入(user=CenterEnd,assistant=CenterStart),据此决定对齐方向。
+        val flowAlignment = if (alignment == Alignment.CenterEnd) Alignment.End else Alignment.Start
+        FlowRow(
+            modifier = Modifier
+                .widthIn(max = maxMessageWidth)
+                .wrapContentWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp, flowAlignment),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            fileAttachments.forEach { file ->
+                FileAttachmentPill(
+                    fileName = file.fileName,
+                    onClick = { openFileWithSystemViewer(context, file) },
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 触发系统 ACTION_VIEW 让用户用文本编辑器打开附件。
+ *
+ * 走 FileProvider 把 filesDir/chat-files/ 子目录通过 content:// URI 暴露,并在 Intent 上挂
+ * [Intent.FLAG_GRANT_READ_URI_PERMISSION] 把临时读权限授给目标 app。
+ *
+ * 失败兜底:文件被外部清理 / 设备没装文本编辑器 / FileProvider 配置异常 → 弹 Toast,
+ * 不抛异常导致气泡崩溃。
+ */
+private fun openFileWithSystemViewer(context: Context, attachment: FileAttachment) {
+    val file = java.io.File(attachment.path)
+    if (!file.exists()) {
+        Toast.makeText(context, "附件文件已不存在", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val uri = try {
+        FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            file,
+        )
+    } catch (e: IllegalArgumentException) {
+        // FileProvider 路径未在 provider_paths.xml 里授权时会抛 IAE
+        Toast.makeText(context, "无法分享文件:${attachment.fileName}", Toast.LENGTH_SHORT).show()
+        return
+    }
+    val intent = Intent(Intent.ACTION_VIEW).apply {
+        // mimeType 空(历史落库异常 / 旧数据)兜底成 text/plain,避免 ACTION_VIEW 找不到 handler。
+        // 当前白名单已保证不会落空 mime,这里只是防御性兜底。
+        val effectiveMime = attachment.mimeType.ifBlank { "text/plain" }
+        setDataAndType(uri, effectiveMime)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    // 走 createChooser 的两个理由:
+    // 1. Android 11+ 包可见性限制:即使 Manifest 声明了 <queries>,某些 ROM 上 resolveActivity
+    //    对带 data + type 的 Intent 仍会误报 null。直接 startActivity + ActivityNotFoundException
+    //    兜底比"先 resolve 再发"更可靠。
+    // 2. 用户体验:每次都让用户选用哪个 app 打开,不被默认 app 锁死(文本编辑器场景常需切换)。
+    val chooser = Intent.createChooser(intent, "用以下应用打开 ${attachment.fileName}").apply {
+        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+    try {
+        context.startActivity(chooser)
+    } catch (e: ActivityNotFoundException) {
+        Toast.makeText(context, "未找到可打开 ${attachment.fileName} 的应用", Toast.LENGTH_SHORT).show()
+    } catch (e: SecurityException) {
+        // FileProvider 临时授权链路异常时会抛 SecurityException
+        Toast.makeText(context, "无法打开:${attachment.fileName}", Toast.LENGTH_SHORT).show()
     }
 }
 

@@ -73,6 +73,7 @@ fun ChatScreen(
     val availableProviders by viewModel.availableProviders.collectAsState()
     val currentThinkingLevel by viewModel.currentThinkingLevel.collectAsState()
     val pendingAttachments by viewModel.pendingAttachments.collectAsState()
+    val pendingFileAttachments by viewModel.pendingFileAttachments.collectAsState()
     val imageInputSupported = currentModel?.inputModalities?.contains(com.nuttavern.data.model.Modality.IMAGE) == true
     val clipboardMessage by viewModel.clipboardMessage.collectAsState()
     val currentCharacter by viewModel.currentCharacter.collectAsState()
@@ -237,9 +238,12 @@ fun ChatScreen(
                         currentThinkingLevel = currentThinkingLevel,
                         currentToolActivity = currentToolActivity,
                         pendingAttachments = pendingAttachments,
+                        pendingFileAttachments = pendingFileAttachments,
                         imageInputSupported = imageInputSupported,
                         onAddImage = viewModel::addImageAttachment,
+                        onAddFile = viewModel::addFileAttachment,
                         onRemoveImage = viewModel::removeImageAttachment,
+                        onRemoveFile = viewModel::removeFileAttachment,
                         onOpenConversationDrawer = {
                             coroutineScope.launch { conversationDrawerState.open() }
                         },
@@ -467,9 +471,12 @@ private fun ChatScreenContent(
     currentThinkingLevel: com.nuttavern.data.model.ThinkingLevel,
     currentToolActivity: String?,
     pendingAttachments: List<com.nuttavern.data.model.ImageAttachment>,
+    pendingFileAttachments: List<com.nuttavern.data.model.FileAttachment>,
     imageInputSupported: Boolean,
     onAddImage: (ByteArray, String) -> Unit,
+    onAddFile: (ByteArray, String?, String) -> Unit,
     onRemoveImage: (String) -> Unit,
+    onRemoveFile: (String) -> Unit,
     onOpenConversationDrawer: () -> Unit,
     onOpenSettingsDrawer: () -> Unit,
     toolDisplayName: (String) -> String,
@@ -532,9 +539,12 @@ private fun ChatScreenContent(
                     currentModelName = currentModel?.modelId.orEmpty(),
                     currentThinkingLevel = currentThinkingLevel,
                     pendingAttachments = pendingAttachments,
+                    pendingFileAttachments = pendingFileAttachments,
                     imageInputSupported = imageInputSupported,
                     onAddImage = onAddImage,
+                    onAddFile = onAddFile,
                     onRemoveImage = onRemoveImage,
+                    onRemoveFile = onRemoveFile,
                     onOpenModelPicker = onOpenModelPicker,
                     onDraftChange = onDraftChange,
                     onSendDraft = onSendDraft,

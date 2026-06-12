@@ -5,8 +5,10 @@ import com.nuttavern.data.local.dao.ConversationDao
 import com.nuttavern.data.local.dao.MessageDao
 import com.nuttavern.data.local.entity.ConversationEntity
 import com.nuttavern.data.local.entity.MessageEntity
+import com.nuttavern.data.files.SupportedTextFileTypes
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.tools.ConversationToolMode
+import com.nuttavern.data.model.FileAttachment
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.data.model.MessagePart
@@ -15,8 +17,10 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -87,7 +91,108 @@ class ConversationRepository @Inject constructor(
         )
     }
 
+    /**
+     * 清理一批消息引用的附件文件(图片 + 文本文件)。
+     *
+     * 调用方:[deleteMessage] / [deleteMessagesAfter] / [deleteMessagesFrom] /
+     * [deleteConversation]。**调用顺序固定为"先清文件、后删 DB 行"**——反过来 DB 行删了
+     * `attachment.path` 就拿不到了,文件就成了孤儿。
+     *
+     * **IO 调度**:本函数体显式 [withContext] 切到 [Dispatchers.IO],覆盖 [java.io.File.delete]
+     * 这条阻塞系统调用,避免删大会话时(N 条消息 × M 个附件)拖慢 ViewModel 主线程。
+     * 与项目内 `CharacterViewModel` / `UserPersonaViewModel` 的落盘 IO 调度风格一致。
+     *
+     * **不在本函数 IO 范围内**:调用方在 purge 之前的 `messageDao.getXxx(...).map { it.toMessage() }`
+     * 仍跑在调用方协程上下文(通常是 `viewModelScope` 默认 Main)。`toMessage` 内会顺带解码
+     * `partsJson` / `swipesJson` 等并非 purge 真正需要的字段,这是已知冗余。删除链路调用频次
+     * 低、单次解码量级可接受,本期不为它单独优化(详见 [decodeFileAttachments] 上方"宽容降级"
+     * 的同款权衡口径)。如未来发现删大会话有掉帧,优先级是把整段"取列表 + map + purge"统一切 IO,
+     * 而不是引入新的"只解附件 JSON 列"分叉。
+     *
+     * **失败语义**:单个文件删除失败(权限 / 文件已被外部清掉等)只 [android.util.Log.w]
+     * 留痕,不抛异常、不阻断后续 DB 删除。文件系统错误本身罕见,且即便残留也只是孤儿
+     * 文件,后续靠"附件 GC 待办"对账清理(见 `AGENTS.md` 待办)。这与 [decodeFileAttachments]
+     * 的"宽容降级 + Log.w 留痕"一致。
+     *
+     * **不进 swipes**:附件挂在 [Message.attachments] / [Message.fileAttachments] 顶层
+     * (user 消息携带),swipes 是 assistant 候选 parts,本身不携带附件,无需遍历。
+     */
+    private suspend fun purgeAttachmentFiles(messages: List<Message>) {
+        if (messages.isEmpty()) return
+        withContext(Dispatchers.IO) {
+            for (message in messages) {
+                for (image in message.attachments) {
+                    deleteAttachmentFile(image.path, "image", message.id)
+                }
+                for (file in message.fileAttachments) {
+                    deleteAttachmentFile(file.path, "file", message.id)
+                }
+            }
+        }
+    }
+
+    /**
+     * 删单个附件文件。
+     *
+     * **路径越界防御**:与 [saveImageBytes] / [saveFileBytes] 的 attachmentId 字符黑名单
+     * 形成对称——save 侧拒绝可疑 id,delete 侧再次校验文件实际落点必须在 [filesDir]
+     * canonical 路径之内。这是纵深防御:正常落库的 path 一定在 filesDir 下;若未来出现
+     * 数据库导入旧备份时 path 字段被篡改 / 历史 schema 漂移等异常情况,这里能挡住把
+     * 任意可写文件被 [java.io.File.delete] 删掉的风险。
+     */
+    private fun deleteAttachmentFile(path: String, kind: String, messageId: String) {
+        if (path.isBlank()) return
+        val file = File(path)
+        val canonical = try {
+            file.canonicalPath
+        } catch (error: java.io.IOException) {
+            android.util.Log.w(
+                "ConversationRepository",
+                "purge $kind attachment failed (canonicalPath) messageId=$messageId path=$path",
+                error,
+            )
+            return
+        }
+        val filesRoot = context.filesDir.canonicalPath
+        // 必须严格落在 filesDir 子路径下:`startsWith(filesRoot + File.separator)` 也会拒绝
+        // path 恰为 filesDir 自身(无子路径)的情况。这是有意的保守策略——save 侧落盘必落到
+        // chat-images/{id} / chat-files/{id},正常 attachment.path 不可能等于 filesDir 自身;
+        // 真出现,说明 path 已被异常源污染,直接拒绝更安全。
+        if (!canonical.startsWith(filesRoot + File.separator)) {
+            android.util.Log.w(
+                "ConversationRepository",
+                "purge $kind attachment refused (out of filesDir) messageId=$messageId path=$path",
+            )
+            return
+        }
+        if (!file.exists()) return
+        val deleted = try {
+            file.delete()
+        } catch (error: SecurityException) {
+            android.util.Log.w(
+                "ConversationRepository",
+                "purge $kind attachment failed (security) messageId=$messageId path=$path",
+                error,
+            )
+            return
+        }
+        if (!deleted) {
+            android.util.Log.w(
+                "ConversationRepository",
+                "purge $kind attachment returned false messageId=$messageId path=$path",
+            )
+        }
+    }
+
     suspend fun deleteMessage(messageId: String) {
+        // 先取消息,再清附件文件,最后删 DB 行。
+        // 顺序不能反:DB 行删了之后 attachment.path 就拿不到了,文件就成了孤儿。
+        // 单条文件删除失败不阻断 DB 删除,Log.w 留痕便于排查;
+        // 残留文件由后续"附件 GC 待办"对账清理(见 AGENTS.md 待办)。
+        val target = messageDao.getById(messageId)?.toMessage()
+        if (target != null) {
+            purgeAttachmentFiles(listOf(target))
+        }
         messageDao.deleteById(messageId)
     }
 
@@ -124,11 +229,52 @@ class ConversationRepository @Inject constructor(
         return File(File(context.filesDir, CHAT_IMAGE_DIRECTORY), "$attachmentId.$safeExtension")
     }
 
+    /**
+     * 把文本文件字节写入 `filesDir/chat-files/{attachmentId}.{ext}`,返回可存进
+     * [FileAttachment.path] 的绝对路径。设计与 [saveImageBytes] 完全对齐(只是目录与扩展名校验不同)。
+     *
+     * **不限大小**:用户决策"超了不怪我"。极端大文件读盘 OOM 由
+     * [com.nuttavern.data.files.FileAttachmentPromptBuilder] 兜底转
+     * `FileAttachmentReadException`,不让 app 崩。
+     *
+     * @throws IllegalArgumentException attachmentId 含路径分隔符 / 扩展名不在
+     *   [SupportedTextFileTypes.EXTENSION_WHITELIST] 时抛出
+     */
+    fun saveFileBytes(attachmentId: String, bytes: ByteArray, extension: String): String {
+        val target = fileAttachmentFor(attachmentId, extension)
+        target.parentFile?.mkdirs()
+        target.writeBytes(bytes)
+        return target.absolutePath
+    }
+
+    /** 读出文件附件字节;文件不存在返回 null。 */
+    fun readFileBytes(path: String?): ByteArray? {
+        val file = path?.takeIf { it.isNotBlank() }?.let { File(it) } ?: return null
+        return if (file.exists()) file.readBytes() else null
+    }
+
+    private fun fileAttachmentFor(attachmentId: String, extension: String): File {
+        require(attachmentId.isNotBlank()) { "Attachment id must not be blank." }
+        // 与 imageFileFor 同口径:拒绝路径分隔符 / 上跳,防止写到私有目录外。
+        require(attachmentId.none { it == '/' || it == '\\' } && !attachmentId.contains("..")) {
+            "Attachment id must not contain path separators."
+        }
+        val safeExtension = extension.trim().trimStart('.').lowercase()
+        require(safeExtension in SupportedTextFileTypes.EXTENSION_WHITELIST) {
+            "Unsupported text file extension: $extension"
+        }
+        return File(File(context.filesDir, CHAT_FILE_DIRECTORY), "$attachmentId.$safeExtension")
+    }
+
     suspend fun deleteMessagesAfter(conversationId: String, messageId: String) {
+        val targets = messageDao.getAfter(conversationId, messageId).map { it.toMessage() }
+        purgeAttachmentFiles(targets)
         messageDao.deleteAfter(conversationId, messageId)
     }
 
     suspend fun deleteMessagesFrom(conversationId: String, messageId: String) {
+        val targets = messageDao.getFrom(conversationId, messageId).map { it.toMessage() }
+        purgeAttachmentFiles(targets)
         messageDao.deleteFrom(conversationId, messageId)
     }
 
@@ -149,6 +295,10 @@ class ConversationRepository @Inject constructor(
     }
 
     suspend fun deleteConversation(id: String) {
+        // 同 deleteMessage 链路:先取整个会话的消息列表清附件,再删会话 DB 行
+        // (Room 外键 cascade 会一并删 messages 行)。顺序不能反。
+        val targets = messageDao.getAllByConversationId(id).map { it.toMessage() }
+        purgeAttachmentFiles(targets)
         conversationDao.deleteById(id)
     }
 
@@ -272,6 +422,7 @@ class ConversationRepository @Inject constructor(
             role = role,
             parts = decodeParts(partsJson),
             attachments = decodeAttachments(attachmentsJson),
+            fileAttachments = decodeFileAttachments(fileAttachmentsJson),
             swipes = decodeSwipes(swipesJson),
             swipeIndex = swipeIndex,
         )
@@ -285,6 +436,7 @@ class ConversationRepository @Inject constructor(
             partsJson = encodeParts(parts),
             createdAt = createdAt,
             attachmentsJson = encodeAttachments(attachments),
+            fileAttachmentsJson = encodeFileAttachments(fileAttachments),
             swipesJson = encodeSwipes(swipes),
             swipeIndex = swipeIndex,
         )
@@ -337,6 +489,24 @@ class ConversationRepository @Inject constructor(
         return attachmentsJsonCodec.encodeToString(attachments)
     }
 
+    private fun decodeFileAttachments(json: String): List<FileAttachment> {
+        if (json.isBlank() || json == "[]") return emptyList()
+        // 损坏 JSON 不让整个会话加载崩,退化为无文件附件。与 decodeParts / decodeSwipes 同口径
+        // 记 warning 便于排查(对齐 PresetDataStore 等 Log.w 风格,**不**沿用 decodeAttachments
+        // 的静默吞错 — 那处口径漂移已在 AGENTS.md 代码审计待办登记)。
+        return runCatching {
+            attachmentsJsonCodec.decodeFromString<List<FileAttachment>>(json)
+        }.getOrElse { error ->
+            android.util.Log.w("ConversationRepository", "decodeFileAttachments failed, dropping file attachments", error)
+            emptyList()
+        }
+    }
+
+    private fun encodeFileAttachments(attachments: List<FileAttachment>): String {
+        if (attachments.isEmpty()) return "[]"
+        return attachmentsJsonCodec.encodeToString(attachments)
+    }
+
     private fun formatRelativeTime(timestamp: Long): String {
         val elapsedMillis = System.currentTimeMillis() - timestamp
         return when {
@@ -377,6 +547,8 @@ class ConversationRepository @Inject constructor(
 
         const val CHAT_IMAGE_DIRECTORY = "chat-images"
         val SUPPORTED_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
+
+        const val CHAT_FILE_DIRECTORY = "chat-files"
 
         val attachmentsJsonCodec = Json { ignoreUnknownKeys = true }
 

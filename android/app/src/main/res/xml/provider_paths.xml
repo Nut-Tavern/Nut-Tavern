@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    FileProvider 暴露路径:只允许 filesDir/chat-files/ 子目录。
+    与 ConversationRepository.CHAT_FILE_DIRECTORY 常量一致。
+    不要扩大暴露范围;聊天图片、persona 头像、数据库文件等都不应通过 FileProvider 出去。
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <files-path
+        name="chat_files"
+        path="chat-files/" />
+</paths>

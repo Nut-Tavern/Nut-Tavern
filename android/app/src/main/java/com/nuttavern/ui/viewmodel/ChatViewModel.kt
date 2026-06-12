@@ -5,10 +5,13 @@ import androidx.lifecycle.viewModelScope
 import com.nuttavern.data.character.Character
 import com.nuttavern.data.character.CharacterRepository
 import com.nuttavern.data.character.characterDepthPromptText
+import com.nuttavern.data.files.FileAttachmentPromptBuilder
+import com.nuttavern.data.files.SupportedTextFileTypes
 import com.nuttavern.data.model.AssistantConfig
 import com.nuttavern.data.model.ChatRunMode
 import com.nuttavern.data.model.ConversationSummary
 import com.nuttavern.data.model.GeneratedContentSanitizer
+import com.nuttavern.data.model.FileAttachment
 import com.nuttavern.data.model.ImageAttachment
 import com.nuttavern.data.model.Message
 import com.nuttavern.data.model.MessagePart
@@ -131,6 +134,14 @@ class ChatViewModel @Inject constructor(
      */
     private val _pendingAttachments = MutableStateFlow<List<ImageAttachment>>(emptyList())
     val pendingAttachments: StateFlow<List<ImageAttachment>> = _pendingAttachments.asStateFlow()
+
+    /**
+     * 待发文本文件附件。与 [_pendingAttachments] 平级独立,不沿用同一 StateFlow:
+     * 文件走纯文本拼接(发送时 [FileAttachmentPromptBuilder] 临时读盘),图片走各家图片块,
+     * 两条链路无交集,合并反而要在订阅方做类型分流。
+     */
+    private val _pendingFileAttachments = MutableStateFlow<List<FileAttachment>>(emptyList())
+    val pendingFileAttachments: StateFlow<List<FileAttachment>> = _pendingFileAttachments.asStateFlow()
 
     private val _chatRunMode = MutableStateFlow(ChatRunMode.CHAT)
     val chatRunMode: StateFlow<ChatRunMode> = _chatRunMode.asStateFlow()
@@ -667,6 +678,115 @@ class ChatViewModel @Inject constructor(
         _pendingAttachments.update { list -> list.filterNot { it.id == attachmentId } }
     }
 
+    /**
+     * 把用户选中的文本文件字节存为待发附件。UI 读 Uri→bytes→mime→fileName 后调用(IO 在 UI 协程里做)。
+     *
+     * 校验三道:MIME / 扩展名白名单([SupportedTextFileTypes.isAllowed]) → BOM 检测拒 UTF-16 / UTF-32 →
+     * 扩展名落盘白名单([ConversationRepository.fileAttachmentFor])。**不限大小**(用户决策),
+     * 极端大文件读盘 OOM 由 [FileAttachmentPromptBuilder] 兜底。
+     *
+     * 失败分支统一吐司阻断,**不**沿用 rikkahub 的 `[ERROR]` 占位拼进 prompt 风格(避免污染对话)。
+     */
+    fun addFileAttachment(bytes: ByteArray, mimeType: String?, fileName: String) {
+        val safeName = fileName.trim()
+        if (safeName.isBlank()) {
+            _errorMessage.value = "无法读取文件名"
+            return
+        }
+        if (!SupportedTextFileTypes.isAllowed(mimeType, safeName)) {
+            _errorMessage.value = "不支持的文件类型:$safeName"
+            return
+        }
+        val extension = SupportedTextFileTypes.extensionOf(safeName)
+        if (extension.isEmpty() || extension !in SupportedTextFileTypes.EXTENSION_WHITELIST) {
+            // isAllowed 放行了 text 前缀但扩展名不在落盘白名单的极端情况(如 .ini 之外的 text/x-config)
+            _errorMessage.value = "不支持的文件扩展名:$safeName"
+            return
+        }
+        // BOM 检测:UTF-8 BOM 跳过(读盘时由 FileAttachmentPromptBuilder 处理),
+        // UTF-32 / UTF-16 BOM 直接拒(不做编码转换)。
+        // **必须先判 UTF-32 再判 UTF-16**:UTF-32 LE BOM 是 `FF FE 00 00`,前 2 字节
+        // 与 UTF-16 LE BOM `FF FE` 完全相同,顺序反了会把 UTF-32 LE 误判为 UTF-16 LE。
+        if (bytes.size >= 4) {
+            val b0 = bytes[0].toInt() and 0xFF
+            val b1 = bytes[1].toInt() and 0xFF
+            val b2 = bytes[2].toInt() and 0xFF
+            val b3 = bytes[3].toInt() and 0xFF
+            // UTF-32 BE: 00 00 FE FF,UTF-32 LE: FF FE 00 00
+            if ((b0 == 0x00 && b1 == 0x00 && b2 == 0xFE && b3 == 0xFF) ||
+                (b0 == 0xFF && b1 == 0xFE && b2 == 0x00 && b3 == 0x00)
+            ) {
+                _errorMessage.value = "暂不支持 UTF-32 编码:$safeName"
+                return
+            }
+        }
+        if (bytes.size >= 2) {
+            val b0 = bytes[0].toInt() and 0xFF
+            val b1 = bytes[1].toInt() and 0xFF
+            // UTF-16 LE: FF FE,UTF-16 BE: FE FF
+            if ((b0 == 0xFF && b1 == 0xFE) || (b0 == 0xFE && b1 == 0xFF)) {
+                _errorMessage.value = "暂不支持 UTF-16 编码:$safeName"
+                return
+            }
+        }
+        // 解出最终落盘的 MIME:优先用 ContentResolver 给的;若给了 octet-stream / null,
+        // 按扩展名兜底成稳定语义,保证落库后历史重发 / 系统 ACTION_VIEW 拿得到合理 MIME。
+        val resolvedMime = resolveFileMimeType(mimeType, extension)
+        viewModelScope.launch(Dispatchers.IO) {
+            val attachmentId = createMessageId("file")
+            val path = try {
+                conversationRepository.saveFileBytes(attachmentId, bytes, extension)
+            } catch (e: Exception) {
+                // 落盘失败根因(磁盘满 / 权限 / 校验失败)记 logcat 便于排查;
+                // runCatching{}.getOrNull() 静默吞错违反"显式异常处理"规范,与 Log.w 风格统一。
+                // 只接 Exception 不接 Throwable:OOM / VirtualMachineError 等致命错误不该被业务路径吞,
+                // 与 FileAttachmentPromptBuilder.readAsText 同款口径。
+                android.util.Log.w("ChatViewModel", "saveFileBytes failed for $safeName", e)
+                null
+            }
+            if (path == null) {
+                _errorMessage.value = "保存文件失败:$safeName"
+                return@launch
+            }
+            _pendingFileAttachments.update {
+                it + FileAttachment(
+                    id = attachmentId,
+                    path = path,
+                    mimeType = resolvedMime,
+                    fileName = safeName,
+                )
+            }
+        }
+    }
+
+    /** 移除一个待发文件附件。已落盘文件留着,与图片附件同策略。 */
+    fun removeFileAttachment(attachmentId: String) {
+        _pendingFileAttachments.update { list -> list.filterNot { it.id == attachmentId } }
+    }
+
+    /**
+     * 把"可能不可信"的 MIME 兜底成稳定语义。系统选择器在某些设备上对 .kt / .md / .toml 等
+     * 返回 application/octet-stream 或 null,落库后系统 ACTION_VIEW 找不到合适 app。按扩展名
+     * 给到一个合理 MIME(优先 `text/` 前缀),让 ACTION_VIEW 链路在大多数设备上能跳到文本编辑器。
+     */
+    private fun resolveFileMimeType(rawMime: String?, extension: String): String {
+        val normalized = rawMime?.trim()?.lowercase().orEmpty()
+        // 已经是合理 MIME 直接保留
+        if (normalized.startsWith("text/")) return normalized
+        if (normalized in SupportedTextFileTypes.MIME_WHITELIST) return normalized
+        return when (extension) {
+            "json", "jsonc", "json5" -> "application/json"
+            "xml" -> "application/xml"
+            "yaml", "yml" -> "application/x-yaml"
+            "toml" -> "application/toml"
+            "html", "htm" -> "text/html"
+            "css" -> "text/css"
+            "csv", "tsv" -> "text/csv"
+            "md", "markdown", "mdx" -> "text/markdown"
+            else -> "text/plain"
+        }
+    }
+
     /** 当前模型是否支持图片输入(inputModalities 含 IMAGE)。UI 据此启用/禁用选图入口。 */
     fun isImageInputSupported(): Boolean {
         return _currentModel.value?.inputModalities?.contains(Modality.IMAGE) == true
@@ -677,8 +797,9 @@ class ChatViewModel @Inject constructor(
 
         val trimmedText = text.trim()
         val attachments = _pendingAttachments.value
-        // 纯文本且无附件才拦截;带图可以只发图不带文字。
-        if (trimmedText.isBlank() && attachments.isEmpty()) return
+        val fileAttachments = _pendingFileAttachments.value
+        // 纯文本且无任何附件才拦截;带图或带文件可以只发附件不带文字。
+        if (trimmedText.isBlank() && attachments.isEmpty() && fileAttachments.isEmpty()) return
 
         _draft.value = ""
         _isReplying.value = true
@@ -700,9 +821,11 @@ class ChatViewModel @Inject constructor(
                     role = "user",
                     parts = listOf(MessagePart.Text(persistedUserText)),
                     attachments = attachments,
+                    fileAttachments = fileAttachments,
                 )
                 appendMessage(conversationId, userMessage, createdAt)
                 _pendingAttachments.value = emptyList()
+                _pendingFileAttachments.value = emptyList()
                 refreshConversationTime(conversationId, createdAt)
 
                 providerRepository.initialize()
@@ -726,12 +849,21 @@ class ChatViewModel @Inject constructor(
                     return@launch
                 }
 
-                val prepared = buildPromptForSend(
-                    conversationId = conversationId,
-                    provider = provider,
-                    model = model,
-                    pendingUserMessage = null,
-                )
+                val prepared = try {
+                    buildPromptForSend(
+                        conversationId = conversationId,
+                        provider = provider,
+                        model = model,
+                        pendingUserMessage = null,
+                    )
+                } catch (e: FileAttachmentPromptBuilder.FileAttachmentReadException) {
+                    // 文件附件读盘失败:与 streamAssistantReplyForConversation 同款处理。
+                    // 单独 catch 是因为外层笼统 catch (Exception) 会把这条 RuntimeException 当成
+                    // 网络错误,给出误导文案"请检查网络、提供商配置或模型名称"。
+                    _errorMessage.value = e.message
+                    _isReplying.value = false
+                    return@launch
+                }
                 persistLorebookTimedEffects(conversationId, prepared.lorebookTimedEffectsJson)
 
                 _streamingConversationId.value = conversationId
@@ -2168,12 +2300,20 @@ class ChatViewModel @Inject constructor(
 
         beforeBuildMessages()
 
-        val prepared = buildPromptForSend(
-            conversationId = conversationId,
-            provider = provider,
-            model = model,
-            pendingUserMessage = null,
-        )
+        val prepared = try {
+            buildPromptForSend(
+                conversationId = conversationId,
+                provider = provider,
+                model = model,
+                pendingUserMessage = null,
+            )
+        } catch (e: FileAttachmentPromptBuilder.FileAttachmentReadException) {
+            // 文件附件读盘失败:已落库消息保持不动(用户能在气泡看到附件名),只阻断本次发送。
+            // 用户可手动删消息重发,或检查文件存在性后重试。
+            _errorMessage.value = e.message
+            _isReplying.value = false
+            return
+        }
         persistLorebookTimedEffects(conversationId, prepared.lorebookTimedEffectsJson)
 
         _streamingConversationId.value = conversationId
@@ -2282,9 +2422,26 @@ class ChatViewModel @Inject constructor(
         val allowImageInlining = isImageInputSupported() && preset.mediaInlining
         val history = _messagesByConversationId.value[conversationId].orEmpty()
             .map { message ->
+                // 文件附件:每条 user 消息按 fileAttachments 顺序读盘 + XML 包装,前置到 content。
+                // 文件文本不落进 message.text(parts.text 永远是用户原始输入),只在喂 API 时
+                // 临时拼接,发完即丢,不污染历史。读盘失败抛 FileAttachmentReadException,
+                // 由 streamAssistantReplyForConversation 捕获 + 吐司 + 阻断。
+                val filesPrefix = if (message.fileAttachments.isNotEmpty()) {
+                    FileAttachmentPromptBuilder.buildPrependedText(
+                        attachments = message.fileAttachments,
+                        repository = conversationRepository,
+                    )
+                } else {
+                    ""
+                }
+                val content = if (filesPrefix.isNotEmpty()) {
+                    if (message.text.isNotBlank()) "$filesPrefix\n\n${message.text}" else filesPrefix
+                } else {
+                    message.text
+                }
                 HistoryMessage(
                     role = message.role,
-                    content = message.text,
+                    content = content,
                     images = if (allowImageInlining) encodeAttachmentsForRequest(message.attachments) else emptyList(),
                 )
             }

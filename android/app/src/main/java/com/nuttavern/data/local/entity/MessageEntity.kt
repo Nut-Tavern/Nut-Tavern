@@ -36,6 +36,12 @@ data class MessageEntity(
      */
     @ColumnInfo(defaultValue = "'[]'") val attachmentsJson: String = "[]",
     /**
+     * 文本文件附件列表(JSON 数组字符串)。空数组 = 没有文件附件。
+     * 只存附件元数据(id / path / mime / fileName),文本二进制落 `filesDir/chat-files/`,不进 DB。
+     * 文件内容**不**落入 [partsJson]——发请求时按附件元数据读盘 + XML 包装拼接,发完即丢。
+     */
+    @ColumnInfo(defaultValue = "'[]'") val fileAttachmentsJson: String = "[]",
+    /**
      * swipe 候选列表(JSON 数组字符串),序列化自 `List<List<com.nuttavern.data.model.MessagePart>>`:
      * 每个元素是一个完整候选的 parts 列表(含正文 / 思考 / 工具调用)。对齐酒馆 `swipes`。
      *

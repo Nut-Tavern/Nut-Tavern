@@ -14,7 +14,7 @@ import com.nuttavern.data.local.entity.MessageEntity
 
 @Database(
     entities = [ConversationEntity::class, MessageEntity::class, CharacterEntity::class],
-    version = 22,
+    version = 23,
     exportSchema = false
 )
 @TypeConverters(Converters::class)
@@ -361,6 +361,20 @@ abstract class NutTavernDatabase : RoomDatabase() {
                 }
                 if (!db.hasColumn("messages", "swipeIndex")) {
                     db.execSQL("ALTER TABLE `messages` ADD COLUMN `swipeIndex` INTEGER NOT NULL DEFAULT 0")
+                }
+            }
+        }
+
+        /**
+         * 消息加 fileAttachmentsJson 字段:用户随消息发送的文本文件附件列表(JSON 数组)。
+         *
+         * 老消息默认 '[]' = 没有文件附件,与升级前行为一致。文件二进制落 `filesDir/chat-files/`,
+         * DB 只存元数据(id / path / mime / fileName),与图片附件 [attachmentsJson] 同策略平级独立。
+         */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                if (!db.hasColumn("messages", "fileAttachmentsJson")) {
+                    db.execSQL("ALTER TABLE `messages` ADD COLUMN `fileAttachmentsJson` TEXT NOT NULL DEFAULT '[]'")
                 }
             }
         }
